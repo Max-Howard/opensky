@@ -6,15 +6,83 @@ from geopy.distance import geodesic
 import numpy as np
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import contextily as ctx
+import geopandas as gpd
+from geographiclib.geodesic import Geodesic
 
+TIME_GAP = 60
 
-def load_flight_paths():
+def load_flight_paths() -> dict[pd.DataFrame]:
+      """
+      Load all flight paths from the output folder.
+      Add a gap column to the dataframes to indicate points with a time gap greater than TIME_GAP.
+      Return a dictionary of flight paths.
+      """
       flight_paths = {}
       for file in os.listdir('./output'):
             if file.endswith('.csv'):
                   file_path = os.path.join('./output', file)
                   df = pd.read_csv(file_path)
+                  df["time"] = pd.to_datetime(df["time"])
+                  print(f"Loaded {file} with {len(df)} rows.")
                   flight_paths[file.replace('.csv', '')] = df
+      return flight_paths
+
+
+def interpolate_great_circle(flight_paths):
+      for flight_path_name, flight_path in flight_paths.items():
+            df = flight_path
+
+            # Find time gaps greater than TIME_GAP
+            time_gaps = df["time"].diff().dt.total_seconds() > TIME_GAP
+            gap_indexes = time_gaps[time_gaps].index.tolist()
+
+            df["interpolated"] = False
+
+            added_rows = 0
+            for gap_num,idx in enumerate(gap_indexes):
+                  idx_corr = idx + added_rows # Corrected index to account for added rows
+                  start_row = df.iloc[idx_corr - 1]
+                  end_row = df.iloc[idx_corr]
+                  start_time = pd.to_datetime(start_row["time"])
+                  end_time = pd.to_datetime(end_row["time"])
+
+                  gap_total_seconds = (end_time - start_time).total_seconds()
+                  num_points = int(np.ceil(gap_total_seconds / TIME_GAP))
+                  print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(gap_indexes)}, in {flight_path_name}, at index {idx}.")
+
+                  time_intervals = pd.date_range(start_time, end_time, periods=num_points + 2)[1:-1]
+
+                  # Initialize the geodesic line
+                  geod = Geodesic.WGS84
+                  line = geod.InverseLine(start_row["lat"], start_row["lon"], end_row["lat"], end_row["lon"])
+
+                  # Total distance along the line
+                  gap_total_distance = line.s13
+
+                  step = gap_total_distance / (num_points + 1)
+                  lat_intervals = []
+                  lon_intervals = []
+                  for i in range(1, num_points+1): # Skip the first and last points as they are already in the dataframe
+                        point = line.Position(i * step)
+                        lat_intervals.append(point['lat2'])
+                        lon_intervals.append(point['lon2'])
+
+                  velocity_intervals = np.linspace(start_row["velocity"], end_row["velocity"], num_points + 2)[1:-1]
+                  gap_mean_velocity = gap_total_distance / gap_total_seconds
+                  velocity_correction = gap_mean_velocity - np.mean(velocity_intervals)
+                  velocity_intervals += velocity_correction # TODO this may introduce errors in the velocity data
+                  print(f"Added: {velocity_correction}, to interval velocities, to ensure continuity with distance travelled.")
+                  interpolated_rows = pd.DataFrame({
+                              "time": time_intervals,
+                              "lat": lat_intervals,
+                              "lon": lon_intervals,
+                              "velocity": velocity_intervals
+                  })
+                  interpolated_rows["interpolated"] = True
+                  added_rows += len(interpolated_rows)
+                  df = pd.concat([df.iloc[:idx_corr], interpolated_rows, df.iloc[idx_corr:]]).reset_index(drop=True)
+            flight_paths[flight_path_name] = df
       return flight_paths
 
 
@@ -57,7 +125,7 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
 
 
 def plot_cartopy(flight_paths):
-      fig = plt.figure(figsize=(10, 5))
+      plt.figure(figsize=(10, 5))
       ax = plt.axes(projection=ccrs.PlateCarree())
       ax.add_feature(cfeature.LAND)
       ax.add_feature(cfeature.OCEAN)
@@ -79,21 +147,123 @@ def plot_cartopy(flight_paths):
 
       ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
 
+      alt_measured = "geoaltitude"
+      alt_measured = "baroaltitude"
+
       max_velocity = max(max(flight_path['velocity']) for flight_path in flight_paths.values())
       min_velocity = min(min(flight_path['velocity']) for flight_path in flight_paths.values())
-      norm = Normalize(vmin=min_velocity, vmax=max_velocity)
+      print(f"Max velocity: {max_velocity}, Min velocity: {min_velocity}")
 
+      # Filter out unrealistic altitude changes
+      for flight_path in flight_paths.values():
+            flight_path[alt_measured] = flight_path[alt_measured].mask(flight_path[alt_measured].diff().abs() > 100)
+
+      max_altitude = max(max(flight_path[alt_measured].dropna()) for flight_path in flight_paths.values())
+      min_altitude = min(min(flight_path[alt_measured].dropna()) for flight_path in flight_paths.values())
+      print(f"Max altitude: {max_altitude}, Min altitude: {min_altitude}")
+
+      # Find the flight path and index where the max altitude occurs
       for flight_path_name, flight_path in flight_paths.items():
-            points = plt.scatter(flight_path['lon'], flight_path['lat'], c=flight_path['velocity'], cmap='viridis', norm=norm, s=5, label=f'{flight_path_name} Points', alpha=1.0)
-            plt.plot(flight_path['lon'], flight_path['lat'], linestyle='-', linewidth=0.5, label=f'{flight_path_name} Path', alpha=0.7)
+            if max_altitude in flight_path[alt_measured].values:
+                  max_altitude_index = flight_path[alt_measured].idxmax()
+                  max_altitude_location = (flight_path['lat'].iloc[max_altitude_index], flight_path['lon'].iloc[max_altitude_index])
+                  print(f"Max altitude occurs in flight path {flight_path_name} at index {max_altitude_index}, location: {max_altitude_location}")
+                  break
 
-      cbar = plt.colorbar(points, orientation='horizontal', pad=0.05, aspect=50, label='Velocity')
-      # plt.scatter(vel_mismatch_lon, vel_mismatch_lat, c='red', s=15, marker='x', label='Velocity Mismatch Anomalies')
+      cbar_var = "Velocity"
+      cbar_var = "Altitude"
 
-      # plt.legend()
+      if cbar_var == "Velocity":
+            cbar_label = "Velocity (m/s)"
+            norm = Normalize(vmin=min_velocity, vmax=max_velocity)
+      elif cbar_var == "Altitude":
+            cbar_label = "Altitude (m)"
+            norm = Normalize(vmin=min_altitude, vmax=max_altitude)
+
+      # Plot the flight paths
+      for flight_path_name, flight_path in flight_paths.items():
+            # Plot the path
+            plt.plot(flight_path['lon'], flight_path['lat'], c='red', linestyle='-', linewidth=0.5, alpha=0.7) #, label=f'{flight_path_name} Path'
+
+            # Add arrows on the path to indicate direction
+            arrow_positions = [0, len(flight_path) // 2, len(flight_path) - 1]
+            for i in arrow_positions:
+                    if i > 0:
+                              plt.arrow(flight_path['lon'].iloc[i - 1], flight_path['lat'].iloc[i - 1],
+                                            flight_path['lon'].iloc[i] - flight_path['lon'].iloc[i - 1],
+                                            flight_path['lat'].iloc[i] - flight_path['lat'].iloc[i - 1],
+                                            color='blue', head_width=0.05, head_length=0.1, linewidth=0.5, alpha=0.7)
+
+            # Remove the interpolated points before plotting the scatter points
+            flight_path = flight_path[~flight_path['interpolated']]
+            if cbar_var == "Altitude":
+                  c = flight_path[alt_measured]
+            elif cbar_var == "Velocity":
+                  c = flight_path['velocity']
+            points = plt.scatter(flight_path['lon'], flight_path['lat'], c=c, cmap='viridis', norm=norm, s=4, alpha=1.0)
+
+      # Plot the interpolated points
+      # interpolated_points = pd.concat([flight_path[flight_path['interpolated']] for flight_path in flight_paths.values()])
+      # plt.scatter(interpolated_points['lon'], interpolated_points['lat'], c='red', s=10, alpha=0.6, label='Interpolated Points')
+
+      cbar = plt.colorbar(points, orientation='horizontal', pad=0.05, aspect=50, label=cbar_label)
+      cbar.ax.set_position([0.215, -0.05, 0.6, 0.3])  # Adjust the position and size of the colorbar
+      # plt.scatter(vel_mismatch_lon, vel_mismatch_lat, c='red', s=15, marker='x', label='Velocity Mismatched with Distance')
+
+      plt.legend()
+      plt.show()
+
+def detail_plot(flight_paths):
+
+      # Define the area around Heathrow
+      cen_lat, cen_lon = 52.3105, 4.7683
+      # cen_lat, cen_lon = 51.4700, -0.4543
+      size_lat = 0.1
+      size_lon = 0.15
+
+      # Filter points within the plot area
+      lat = []
+      lon = []
+      velocities = []
+      for flight_path_name, flight_path in flight_paths.items():
+            mask = (
+                    (flight_path['lat'] >= cen_lat - size_lat) &
+                    (flight_path['lat'] <= cen_lat + size_lat) &
+                    (flight_path['lon'] >= cen_lon - size_lon) &
+                    (flight_path['lon'] <= cen_lon + size_lon)
+            )
+            lat.extend(flight_path['lat'][mask])
+            lon.extend(flight_path['lon'][mask])
+            velocities.extend(flight_path['velocity'][mask])
+
+      # Create a GeoDataFrame for the scatter points
+      gdf_points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(lon, lat), crs="EPSG:4326")
+
+      # Convert to Web Mercator for compatibility with contextily
+      gdf_points = gdf_points.to_crs(epsg=3857)
+
+      # Plot the scatter points
+      fig, ax = plt.subplots(figsize=(10, 10))
+      gdf_points.plot(ax=ax, color='blue', marker='.', markersize=5, label='Locations', alpha=0.7)
+
+      # Add a basemap
+      ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom=14)
+
+      # Add title and legend
+      ax.set_axis_off()
+      plt.title('Flight Paths around Heathrow')
+      plt.legend()
       plt.show()
 
 
+
+
+      
+
+
 flight_paths = load_flight_paths()
-vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
+flight_paths = interpolate_great_circle(flight_paths)
+# vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
 plot_cartopy(flight_paths)
+
+# detail_plot(flight_paths)
