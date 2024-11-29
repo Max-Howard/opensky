@@ -2,6 +2,7 @@ from pyopensky.trino import Trino
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+import os
 
 trino = Trino()
 
@@ -9,60 +10,100 @@ scanning_stop = datetime.now()
 scanning_start = scanning_stop - timedelta(days=100)
 REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "onground", "baroaltitude", "geoaltitude", "lastposupdate", "lastcontact", "icao24"]
 PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
+PATH_AIRPORT_ICAO_NAMES = "airports.csv"
+FLIGHT_DATA_PATH = "output"
 
-# pairs_to_test = {
-#     {"name": "heathrow_denver", "departure":"EGLL","arrival": "KDEN", "typecode": "A140", "count": 1},
-#     {"name": "glasgow_amsterdam", "departure" : "EGPF", "arrival" : "EHAM", "typecode": None, "count": 1}}
+def load_fcounts(fcount_path=PATH_FLIGHTS_TO_LOAD):
+    """
+    Load the flight counts from CSV, and add the origin and destination ICAO names
+    """
+    flight_counts = pd.read_csv(fcount_path)
+    airport_names = pd.read_csv(PATH_AIRPORT_ICAO_NAMES)
+    flight_counts["origin_name"] = flight_counts["origin"].map(airport_names.set_index("icao")["name"])
+    flight_counts["destination_name"] = flight_counts["destination"].map(airport_names.set_index("icao")["name"])
+    return flight_counts
 
-def test_flight_data_from_list():
-    flights_to_import = pd.read_csv(PATH_FLIGHTS_TO_LOAD)
-    airport_names = pd.read_csv("airports.csv")
-    flights_to_import["origin_name"] = flights_to_import["origin"].map(airport_names.set_index("icao")["name"])
-    flights_to_import["destination_name"] = flights_to_import["destination"].map(airport_names.set_index("icao")["name"])
-    for i in range(1,len(flights_to_import)):
-        flight_to_import = flights_to_import.iloc[i]
+def clean_save_dir(backup=True):
+    if backup and os.path.exists(FLIGHT_DATA_PATH):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = f"{FLIGHT_DATA_PATH}_backup_{timestamp}"
+        os.rename(FLIGHT_DATA_PATH, backup_dir)
+        os.makedirs(FLIGHT_DATA_PATH)
+        with open(os.path.join(FLIGHT_DATA_PATH, ".gitignore"), "w") as gitignore_file:
+            gitignore_file.write("*")
+        print(f"Moved {FLIGHT_DATA_PATH} to {backup_dir}")
+    elif os.path.exists(FLIGHT_DATA_PATH):
+        input(f"This will delete all files in the {FLIGHT_DATA_PATH} directory. Press enter to continue.")
+        for filename in os.listdir(FLIGHT_DATA_PATH):
+            file_path = os.path.join(FLIGHT_DATA_PATH, filename)
+            if filename != ".gitignore" and os.path.isfile(file_path):
+                os.remove(file_path)
+        print(f"Deleted all files in {FLIGHT_DATA_PATH}")
+    else:
+        os.makedirs(FLIGHT_DATA_PATH)
+        with open(os.path.join(FLIGHT_DATA_PATH, ".gitignore"), "w") as gitignore_file:
+            gitignore_file.write("*")
+        print(f"Created {FLIGHT_DATA_PATH}")
+
+def clean_flight_data(flight_path):
+    initial_length = len(flight_path)
+    flight_path = flight_path.dropna()                                  # Drop rows with missing data
+    flight_path = flight_path[flight_path['lastposupdate'].diff() != 0] # Drop rows with without position update
+    flight_path = flight_path.sort_values(by='time')                    # Sort by time
+    flight_path.reset_index(drop=True)                                  # Reset index
+    rows_removed = initial_length - len(flight_path)
+    if rows_removed > 0:
+        print(f"Removed {rows_removed} of {initial_length} rows due to missing or repeated data")
+    return flight_path
+
+def load_flight_adsb(flight_counts):
+
+    for i in range(1,len(flight_counts)):
+        flight_to_import = flight_counts.iloc[i]
         if flight_to_import["typecode"] == np.nan:
-            print(f"""Searching for {flight_to_import["count"]} flight(s) from {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]} with typecode {flight_to_import['typecode']}""")
+            print(f"Searching for {flight_to_import['count']} flight(s) ",
+                  f"from {flight_to_import['origin_name']} to ",
+                  f"{flight_to_import['destination_name']} ",
+                  f"with typecode {flight_to_import['typecode']}")
         else:
-            print(f"""Searching for {flight_to_import["count"]} flight(s) from {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]} without typecode""")
+            print(f"Searching for {flight_to_import['count']} flight(s) ",
+                  f"from {flight_to_import['origin_name']} to ",
+                  f"{flight_to_import['destination_name']} without typecode")
 
         # Trino seems to handle the case where the typecode is None, so we can just pass it in
-        flight_start_end = trino.flightlist(
+        flight_durations = trino.flightlist(
             scanning_start,
             scanning_stop,
             departure_airport=flight_to_import["origin"],
             arrival_airport=flight_to_import["destination"],
             icao24=flight_to_import["typecode"],
-            limit=flight_to_import["count"])
+            limit=flight_to_import["count"])    # Limit the number of flights to import to the count in the CSV
 
-        if type(flight_start_end) is not pd.DataFrame:
+        if type(flight_durations) is not pd.DataFrame:
             print("Could not find flight.\n")
             continue
 
-        print(f"Found {len(flight_start_end)} flights from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}")
-        print(flight_start_end)
+        print(f"Found {len(flight_durations)}/{flight_to_import['count']} flights ",
+              f"from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}")
 
-        for i in range(len(flight_start_end)):
-            data_start = flight_start_end.iloc[i, flight_start_end.columns.get_loc("firstseen")]
-            data_stop = flight_start_end.iloc[i, flight_start_end.columns.get_loc("lastseen")]
+        for i in range(len(flight_durations)):
+            data_start = flight_durations.iloc[i, flight_durations.columns.get_loc("firstseen")]
+            data_stop = flight_durations.iloc[i, flight_durations.columns.get_loc("lastseen")]
 
             print(f"Loading path for flight number {i+1}, time period: {data_start} to {data_stop}")
 
             flight_path = trino.history(start=data_start,
                             stop=data_stop,
-                            icao24=flight_start_end.iloc[i, flight_start_end.columns.get_loc("icao24")],
+                            icao24=flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")],
                             selected_columns=REQUESTED_COLUMNS)
-            initial_length = len(flight_path)
-            flight_path = flight_path.dropna().reset_index(drop=True)   # Drop rows with missing data otherwise sorting will fill with NaN
-            flight_path = flight_path[flight_path['lastposupdate'].diff() != 0].reset_index(drop=True)  # Drop rows with duplicate lastposupdate
-            final_length = len(flight_path)
-            rows_removed = initial_length - final_length
-            if rows_removed > 0:
-                print(f"Removed {rows_removed} rows due to missing or repeated data")
-            flight_path = flight_path.sort_values(by='time') # TODO not sure why this is necessary
-            filename = f"""output/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{i+1}.csv"""
+
+            flight_path = clean_flight_data(flight_path)
+
+            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{i+1}.csv"""
             flight_path.to_csv(filename, index=False)
             print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}\n""")
 
-test_flight_data_from_list()
+clean_save_dir()
+flight_counts = load_fcounts()
+load_flight_adsb(flight_counts)
 

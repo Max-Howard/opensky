@@ -1,18 +1,25 @@
 {
     "cSpell.words": [
+        "adsb",
         "baroaltitude",
         "Carree",
         "ccrs",
         "cfeature",
+        "contextily",
         "dropna",
         "EGLL",
         "EGPF",
         "EHAM",
+        "fcount",
         "fcounts",
+        "geod",
         "icao",
         "KDEN",
         "lats",
         "lons",
-        "onground"
+        "Mapnik",
+        "onground",
+        "vmax",
+        "vmin"
     ]
 }
