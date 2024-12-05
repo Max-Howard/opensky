@@ -13,6 +13,10 @@ PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
 PATH_AIRPORT_ICAO_NAMES = "airports.csv"
 FLIGHT_DATA_PATH = "output"
 
+# Max value for filtering out unrealistic data
+MAX_VELOCITY = 500  # Maximum velocity in m/s
+MAX_VERT_RATE = 100  # Maximum vertical rate in m/s
+
 def load_fcounts(fcount_path=PATH_FLIGHTS_TO_LOAD):
     """
     Load the flight counts from CSV, and add the origin and destination ICAO names
@@ -45,16 +49,36 @@ def clean_save_dir(backup=True):
             gitignore_file.write("*")
         print(f"Created {FLIGHT_DATA_PATH}")
 
-def clean_flight_data(flight_path):
+def clean_flight_data(flight_path: pd.DataFrame):
     initial_length = len(flight_path)
     flight_path = flight_path.dropna()                                  # Drop rows with missing data
     flight_path = flight_path[flight_path['lastposupdate'].diff() != 0] # Drop rows with without position update
     flight_path = flight_path.drop(columns=['lastposupdate'])           # lastposupdate is no longer needed
     flight_path = flight_path.sort_values(by='time')                    # Sort by time
-    flight_path.reset_index(drop=True)                                  # Reset index
+    flight_path = flight_path.reset_index(drop=True)                    # Reset index
     rows_removed = initial_length - len(flight_path)
     if rows_removed > 0:
         print(f"Removed {rows_removed} of {initial_length} rows due to missing or repeated data")
+
+    # Remove rows where the data makes a jump larger than normal
+    # TODO implement a more sophisticated filter including other parameters
+
+    time_gap = flight_path['time'].diff().dt.total_seconds()
+
+    # Calculate the altitude change between consecutive rows
+    geo_altitude_diff = flight_path['geoaltitude'].diff()
+    baro_altitude_diff = flight_path['baroaltitude'].diff()
+    geo_altitude_rate = geo_altitude_diff / time_gap
+    baro_altitude_rate = baro_altitude_diff / time_gap
+    altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
+
+    # Filter out rows with unrealistic jumps
+    initial_length = len(flight_path)
+    flight_path = flight_path[altitude_change_rate <= MAX_VERT_RATE]
+    rows_removed = initial_length - len(flight_path)
+    if rows_removed > 0:
+        print(f"Removed {rows_removed} rows due to unrealistic altitude change rate")
+
     return flight_path
 
 def load_flight_adsb(flight_counts):
@@ -62,7 +86,7 @@ def load_flight_adsb(flight_counts):
     for i in range(len(flight_counts)):
         flight_to_import = flight_counts.iloc[i]
 
-        if isinstance(flight_to_import["typecode"], float):
+        if isinstance(flight_to_import["typecode"], float): # TODO this can be improved
             if np.isnan(flight_to_import["typecode"]):  # NaN indicates no specified typecode
                 print(f"Searching for {flight_to_import['count']} flight(s) ",
                     f"from {flight_to_import['origin_name']} to ",
