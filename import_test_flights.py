@@ -8,7 +8,7 @@ trino = Trino()
 
 scanning_stop = datetime.now()
 scanning_start = scanning_stop - timedelta(days=100)
-REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "onground", "baroaltitude", "geoaltitude", "lastposupdate", "lastcontact", "icao24"]
+REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "onground", "baroaltitude", "geoaltitude", "lastposupdate", "icao24"] # lastcontact
 PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
 PATH_AIRPORT_ICAO_NAMES = "airports.csv"
 FLIGHT_DATA_PATH = "output"
@@ -49,6 +49,7 @@ def clean_flight_data(flight_path):
     initial_length = len(flight_path)
     flight_path = flight_path.dropna()                                  # Drop rows with missing data
     flight_path = flight_path[flight_path['lastposupdate'].diff() != 0] # Drop rows with without position update
+    flight_path = flight_path.drop(columns=['lastposupdate'])           # lastposupdate is no longer needed
     flight_path = flight_path.sort_values(by='time')                    # Sort by time
     flight_path.reset_index(drop=True)                                  # Reset index
     rows_removed = initial_length - len(flight_path)
@@ -58,17 +59,22 @@ def clean_flight_data(flight_path):
 
 def load_flight_adsb(flight_counts):
 
-    for i in range(1,len(flight_counts)):
+    for i in range(len(flight_counts)):
         flight_to_import = flight_counts.iloc[i]
-        if flight_to_import["typecode"] == np.nan:
+
+        if isinstance(flight_to_import["typecode"], float):
+            if np.isnan(flight_to_import["typecode"]):  # NaN indicates no specified typecode
+                print(f"Searching for {flight_to_import['count']} flight(s) ",
+                    f"from {flight_to_import['origin_name']} to ",
+                    f"{flight_to_import['destination_name']} without typecode")
+            else:
+                raise NotImplementedError("Typecode is a float, but not NaN")
+        else:
+            raise NotImplementedError("Cannot sort by typecode")
             print(f"Searching for {flight_to_import['count']} flight(s) ",
                   f"from {flight_to_import['origin_name']} to ",
                   f"{flight_to_import['destination_name']} ",
                   f"with typecode {flight_to_import['typecode']}")
-        else:
-            print(f"Searching for {flight_to_import['count']} flight(s) ",
-                  f"from {flight_to_import['origin_name']} to ",
-                  f"{flight_to_import['destination_name']} without typecode")
 
         # Trino seems to handle the case where the typecode is None, so we can just pass it in
         flight_durations = trino.flightlist(
@@ -96,6 +102,10 @@ def load_flight_adsb(flight_counts):
                             stop=data_stop,
                             icao24=flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")],
                             selected_columns=REQUESTED_COLUMNS)
+            
+            flight_path["origin"] = flight_to_import["origin"]
+            flight_path["destination"] = flight_to_import["destination"]
+            # TODO store the typecode in the dataframe as well
 
             flight_path = clean_flight_data(flight_path)
 
