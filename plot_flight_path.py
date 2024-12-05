@@ -10,7 +10,50 @@ import contextily as ctx
 import geopandas as gpd
 from geographiclib.geodesic import Geodesic
 
+
 TIME_GAP = 60
+CRUISE_STEP = 50 * 1852       # 50 nautical miles in meters
+DELTA_ALT_CRUISE = 3000 * 0.3048    # 3000 ft in meters
+DELTA_ALT_CRUISE = 16000 * 0.3048    # 16000 ft in meters
+AIRPORT_NAMES = pd.read_csv("airports.csv")
+
+class FlightPath:
+      def __init__(self, flightname:str, df:pd.DataFrame):
+            self.flightname = flightname
+            df["time"] = pd.to_datetime(df["time"])
+            self.icao24 = df["icao24"].iloc[0]
+            self.origin_icao = df["origin"].iloc[0]
+            self.destination_icao = df["destination"].iloc[0]
+            df.drop(columns=["icao24"], inplace=True)
+            df.drop(columns=["origin"], inplace=True)
+            df.drop(columns=["destination"], inplace=True)
+            self.origin_name = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == self.origin_icao]["name"].iloc[0]
+            self.destination_name = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == self.destination_icao]["name"].iloc[0]
+            self.df = df
+
+      def __repr__(self):
+            return f"FlightPath: {self.flightname}, with {len(self.df)} rows."
+      
+      def separate_legs(self):
+            """
+            Separate the flight path into takeoff, cruise, and landing phases.
+            """
+            # Find the start and end of the cruise phase
+            cutoff_alt = DELTA_ALT_CRUISE + self.df["geoaltitude"].iloc[0]
+            cruise_start_idx = self.df["geoaltitude"].gt(cutoff_alt).idxmax()
+            cruise_end_idx = self.df["geoaltitude"].gt(cutoff_alt)[::-1].idxmax()
+            self.takeoff = self.df.iloc[:cruise_start_idx]
+            self.cruise = self.df.iloc[cruise_start_idx:cruise_end_idx]
+            self.landing = self.df.iloc[cruise_end_idx:]
+
+def load_flight_paths_obj() -> FlightPath:
+      flight_paths = []
+      for file in os.listdir('./output'):
+            if file.endswith('.csv'):
+                  file_path = os.path.join('./output', file)
+                  df = pd.read_csv(file_path)
+                  flight_paths[file.replace('.csv', '')] = FlightPath(file.replace('.csv', ''), df)
+      return flight_paths
 
 def load_flight_paths() -> dict[pd.DataFrame]:
       """
@@ -29,9 +72,19 @@ def load_flight_paths() -> dict[pd.DataFrame]:
       return flight_paths
 
 
-def interpolate_great_circle(flight_paths):
-      for flight_path_name, flight_path in flight_paths.items():
-            df = flight_path
+def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
+      for flight_name in flight_paths.keys():
+            df:pd.DataFrame = flight_paths[flight_name]
+
+            # Find the start and end of the cruise phase
+            cutoff_alt = DELTA_ALT_CRUISE + df["geoaltitude"].iloc[0] # Cruise altitude starts ALT_CRUISE above the first altitude
+            cruise_start_idx = df["geoaltitude"].gt(cutoff_alt).idxmax()
+            cruise_end_idx = df["geoaltitude"].gt(cutoff_alt)[::-1].idxmax()
+
+            print(f"Found cruise start at index {cruise_start_idx} and end at index {cruise_end_idx}.")
+
+            # df = df.drop(df.index[cruise_start_idx:cruise_end_idx]).reset_index(drop=True)
+
 
             # Find time gaps greater than TIME_GAP
             time_gaps = df["time"].diff().dt.total_seconds() > TIME_GAP
@@ -46,19 +99,18 @@ def interpolate_great_circle(flight_paths):
                   end_row = df.iloc[idx_corr]
                   start_time = pd.to_datetime(start_row["time"])
                   end_time = pd.to_datetime(end_row["time"])
-
                   gap_total_seconds = (end_time - start_time).total_seconds()
-                  num_points = int(np.ceil(gap_total_seconds / TIME_GAP))
-                  print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(gap_indexes)}, in {flight_path_name}, at index {idx}.")
-
-                  time_intervals = pd.date_range(start_time, end_time, periods=num_points + 2)[1:-1]
 
                   # Initialize the geodesic line
                   geod = Geodesic.WGS84
                   line = geod.InverseLine(start_row["lat"], start_row["lon"], end_row["lat"], end_row["lon"])
-
-                  # Total distance along the line
                   gap_total_distance = line.s13
+                  num_points = int(np.ceil(gap_total_distance / CRUISE_STEP)) # Number of points to add to fill the gap
+
+                  print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(gap_indexes)}, in {flight_name}, at index {idx}.")
+
+                  time_intervals = pd.date_range(start_time, end_time, periods=num_points + 2)[1:-1]
+
 
                   step = gap_total_distance / (num_points + 1)
                   lat_intervals = []
@@ -82,7 +134,7 @@ def interpolate_great_circle(flight_paths):
                   interpolated_rows["interpolated"] = True
                   added_rows += len(interpolated_rows)
                   df = pd.concat([df.iloc[:idx_corr], interpolated_rows, df.iloc[idx_corr:]]).reset_index(drop=True)
-            flight_paths[flight_path_name] = df
+            flight_paths[flight_name] = df
       return flight_paths
 
 
@@ -184,15 +236,6 @@ def plot_cartopy(flight_paths):
       for flight_path_name, flight_path in flight_paths.items():
             # Plot the path
             plt.plot(flight_path['lon'], flight_path['lat'], c='red', linestyle='-', linewidth=0.5, alpha=0.7) #, label=f'{flight_path_name} Path'
-
-            # Add arrows on the path to indicate direction
-            arrow_positions = [0, len(flight_path) // 2, len(flight_path) - 1]
-            for i in arrow_positions:
-                    if i > 0:
-                              plt.arrow(flight_path['lon'].iloc[i - 1], flight_path['lat'].iloc[i - 1],
-                                            flight_path['lon'].iloc[i] - flight_path['lon'].iloc[i - 1],
-                                            flight_path['lat'].iloc[i] - flight_path['lat'].iloc[i - 1],
-                                            color='blue', head_width=0.05, head_length=0.1, linewidth=0.5, alpha=0.7)
 
             # Remove the interpolated points before plotting the scatter points
             flight_path = flight_path[~flight_path['interpolated']]
