@@ -46,13 +46,16 @@ class FlightPath:
             self.cruise = self.df.iloc[cruise_start_idx:cruise_end_idx]
             self.landing = self.df.iloc[cruise_end_idx:]
 
-def load_flight_paths_obj() -> FlightPath:
+      def interpolate_great_circle(self):
+            pass
+
+def load_flight_paths_obj() -> list[FlightPath]:
       flight_paths = []
-      for file in os.listdir('./output'):
-            if file.endswith('.csv'):
-                  file_path = os.path.join('./output', file)
+      for filename in os.listdir('./output'):
+            if filename.endswith('.csv'):
+                  file_path = os.path.join('./output', filename)
                   df = pd.read_csv(file_path)
-                  flight_paths[file.replace('.csv', '')] = FlightPath(file.replace('.csv', ''), df)
+                  flight_paths.append(df)
       return flight_paths
 
 def load_flight_paths() -> dict[pd.DataFrame]:
@@ -148,31 +151,31 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
 
             for i in range(1, len(times)):
                   time_gap = (times[i] - times[i - 1]).total_seconds()
-                  distance_travelled = np.round(geodesic((lats[i - 1], lons[i - 1]), (lats[i], lons[i])).kilometers)
+                  distance_travelled = np.round(geodesic((lats[i - 1], lons[i - 1]), (lats[i], lons[i])).meters)
                   if time_gap < 0:
                         print(f"""Negative time jump in flight path {flight_path_name}, between indexes {i-1} and {i}.\n""")
                   elif time_gap > time_gap_thresh:
                         print(f"""Large time gap in flight path {flight_path_name}, between indexes {i-1} and {i}.\n"""
-                              f"""Time gap: {time_gap} seconds, distance gap: {distance_travelled} km\n""")
-                  elif distance_travelled / time_gap - flight_path['velocity'][i] > 10:   # Velocity check over 1 index
+                              f"""Time gap: {time_gap} seconds, distance gap: {distance_travelled/1000} km\n""")
+                  elif abs((distance_travelled / time_gap) - flight_path['velocity'][i]) > 10:   # Velocity check over 1 index
                         print(f"Velocity mismatch at index {i} in {flight_path_name}.\n"
                               f"Calculated velocity: {distance_travelled / time_gap} m/s, reported velocity: {flight_path['velocity'][i]} m/s\n")
                   elif i % vel_sample_size == 0:                                          # Every vel_sample_size indexes, check velocity over sample
                         time_gap = (times[i] - times[i - vel_sample_size]).total_seconds()
                         distance_travelled = 0
                         for j in range(i - vel_sample_size, i):
-                                distance_travelled += geodesic((lats[j], lons[j]), (lats[j + 1], lons[j + 1])).kilometers
+                                distance_travelled += geodesic((lats[j], lons[j]), (lats[j + 1], lons[j + 1])).meters
                         distance_travelled = np.round(distance_travelled)
-                        displacement = np.round(geodesic((lats[i - vel_sample_size], lons[i - vel_sample_size]), (lats[i], lons[i])).kilometers)
-                        speed_step = np.round((displacement * 1000 / time_gap))
-                        velocity_step = np.round((distance_travelled * 1000 / time_gap))
+                        displacement = np.round(geodesic((lats[i - vel_sample_size], lons[i - vel_sample_size]), (lats[i], lons[i])).meters)
+                        speed_step = np.round((displacement / time_gap))
+                        velocity_step = np.round((distance_travelled / time_gap))
                         velocity_reported = np.round(np.mean(flight_path['velocity'][i-vel_sample_size:i]))
                         if abs(velocity_step - velocity_reported) > vel_mismatch_thresh:
                               vel_mismatch_lat.append(lats[i-vel_sample_size:i])
                               vel_mismatch_lon.append(lons[i-vel_sample_size:i])
                               print(f"""Reported speed mismatched with distance travelled in {flight_path_name}, between indexes {i-vel_sample_size} and {i}.\n"""
                                     f"""Reported velocity: {velocity_reported} m/s, required velocity: {velocity_step} m/s, required speed: {speed_step} m/s\n"""
-                                    f"""Time gap: {time_gap} seconds, distance travelled: {distance_travelled} km, displacement: {displacement} km\n""")
+                                    f"""Time gap: {time_gap} seconds, distance travelled: {distance_travelled/1000} km, displacement: {displacement/1000} km\n""")
       return vel_mismatch_lat, vel_mismatch_lon
 
 
@@ -306,7 +309,7 @@ def detail_plot(flight_paths):
 
 flight_paths = load_flight_paths()
 flight_paths = interpolate_great_circle(flight_paths)
-# vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
-plot_cartopy(flight_paths)
+vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
+# plot_cartopy(flight_paths)
 
 # detail_plot(flight_paths)
