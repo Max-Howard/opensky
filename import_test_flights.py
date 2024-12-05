@@ -127,11 +127,11 @@ def load_flight_adsb(flight_counts):
                             icao24=flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")],
                             selected_columns=REQUESTED_COLUMNS)
             
+            flight_path = clean_flight_data(flight_path)
+
             flight_path["origin"] = flight_to_import["origin"]
             flight_path["destination"] = flight_to_import["destination"]
             # TODO store the typecode in the dataframe as well
-
-            flight_path = clean_flight_data(flight_path)
 
             filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{i+1}.csv"""
             flight_path.to_csv(filename, index=False)

@@ -146,8 +146,10 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
       vel_mismatch_lon = []
       for flight_path_name, flight_path in flight_paths.items():
             times = pd.to_datetime(flight_path['time'])
+            # times = pd.to_datetime(flight_path['lastposupdate'], unit='s')
             lats = flight_path['lat']
             lons = flight_path['lon']
+            num_vel_mismatch = 0
 
             for i in range(1, len(times)):
                   time_gap = (times[i] - times[i - 1]).total_seconds()
@@ -158,8 +160,9 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
                         print(f"""Large time gap in flight path {flight_path_name}, between indexes {i-1} and {i}.\n"""
                               f"""Time gap: {time_gap} seconds, distance gap: {distance_travelled/1000} km\n""")
                   elif abs((distance_travelled / time_gap) - flight_path['velocity'][i]) > 10:   # Velocity check over 1 index
-                        print(f"Velocity mismatch at index {i} in {flight_path_name}.\n"
-                              f"Calculated velocity: {distance_travelled / time_gap} m/s, reported velocity: {flight_path['velocity'][i]} m/s\n")
+                        num_vel_mismatch += 1
+                        # print(f"Velocity mismatch at index {i} in {flight_path_name}.\n"
+                        #       f"Calculated velocity: {distance_travelled / time_gap} m/s, reported velocity: {flight_path['velocity'][i]} m/s\n")
                   elif i % vel_sample_size == 0:                                          # Every vel_sample_size indexes, check velocity over sample
                         time_gap = (times[i] - times[i - vel_sample_size]).total_seconds()
                         distance_travelled = 0
@@ -176,6 +179,7 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
                               print(f"""Reported speed mismatched with distance travelled in {flight_path_name}, between indexes {i-vel_sample_size} and {i}.\n"""
                                     f"""Reported velocity: {velocity_reported} m/s, required velocity: {velocity_step} m/s, required speed: {speed_step} m/s\n"""
                                     f"""Time gap: {time_gap} seconds, distance travelled: {distance_travelled/1000} km, displacement: {displacement/1000} km\n""")
+            print(f"Found {num_vel_mismatch} velocity mismatches in {flight_path_name}.\n")
       return vel_mismatch_lat, vel_mismatch_lon
 
 
