@@ -8,7 +8,7 @@ trino = Trino()
 
 scanning_stop = datetime.now()
 scanning_start = scanning_stop - timedelta(days=100)
-REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude", "lastposupdate"] # lastcontact,  "onground", "icao24"
+REQUESTED_COLUMNS = ["lastposupdate", "lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude"] # "time" ,lastcontact,  "onground", "icao24"
 PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
 PATH_AIRPORT_ICAO_NAMES = "airports.csv"
 FLIGHT_DATA_PATH = "output"
@@ -54,15 +54,14 @@ def clean_flight_data(flight_path: pd.DataFrame):
     flight_path = flight_path.dropna()                                  # Drop rows with missing data
     len_after_empty_rm = len(flight_path)
     flight_path = flight_path.sort_values(by='lastposupdate')           # Sort by time
-    flight_path = flight_path[flight_path['lastposupdate'].diff() != 0] # Drop rows with without position update
-    # flight_path = flight_path.drop(columns=['lastposupdate'])           # lastposupdate is no longer needed
+    flight_path = flight_path.drop_duplicates(subset=["lastposupdate"], keep="first") # Drop duplicate rows with without position update
     flight_path = flight_path.reset_index(drop=True)                    # Reset index
     len_after_duplicates_rm = len(flight_path)
 
     # Remove rows where the data makes a jump larger than normal
     # TODO implement a more sophisticated filter including other parameters
 
-    time_gap = flight_path['time'].diff().dt.total_seconds()
+    time_gap = flight_path['lastposupdate'].diff()
 
     # Calculate the altitude change between consecutive rows
     geo_altitude_diff = flight_path['geoaltitude'].diff()
@@ -145,21 +144,18 @@ def load_flight_adsb(flight_counts):
         for i in range(len(flight_durations)):
             data_start = flight_durations.iloc[i, flight_durations.columns.get_loc("firstseen")]
             data_stop = flight_durations.iloc[i, flight_durations.columns.get_loc("lastseen")]
+            icao24 = flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")]
 
             print(f"Loading path for flight number {i+1}, time period: {data_start} to {data_stop}")
 
             flight_path = trino.history(start=data_start,
                             stop=data_stop,
-                            icao24=flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")],
+                            icao24=icao24,
                             selected_columns=REQUESTED_COLUMNS)
-            
+
             flight_path = clean_flight_data(flight_path)
-
-            # flight_path["origin"] = flight_to_import["origin"]
-            # flight_path["destination"] = flight_to_import["destination"]
-            # flight_path["typecode"] = flight_to_import["typecode"]
-
-            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{i+1}.csv"""
+            flight_path = flight_path.rename(columns={"lastposupdate": "time"})
+            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{icao24}_{i+1}.csv"""
             flight_path.to_csv(filename, index=False)
             print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}\n""")
 

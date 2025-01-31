@@ -141,6 +141,13 @@ def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
             flight_paths[flight_name] = df
       return flight_paths
 
+def find_time_diff(flight_paths):
+      for flight_name, df in flight_paths.items():
+            df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
+            df["lastposupdate"] = pd.to_datetime(df["lastposupdate"], unit='s').dt.tz_localize(None)
+            df["time_diff"] = (df["time"] - df["lastposupdate"]).abs()
+            max_time_diff = df["time_diff"].max()
+            print(f"Max time difference in {flight_name}: {max_time_diff}")
 
 def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_sample_size=100):
       vel_mismatch_lat = []
@@ -331,7 +338,7 @@ def detail_plot(flight_paths):
       plt.savefig("test.png",bbox_inches='tight', dpi = 300)
       plt.show()
 
-flight_paths = load_flight_paths("output_ams")
+flight_paths = load_flight_paths("output")
 flight_paths = interpolate_great_circle(flight_paths)
 vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
 plot_cartopy(flight_paths)
