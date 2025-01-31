@@ -9,6 +9,7 @@ import cartopy.feature as cfeature
 import contextily as ctx
 import geopandas as gpd
 from geographiclib.geodesic import Geodesic
+from shapely.geometry import Point
 
 
 TIME_GAP = 60
@@ -33,7 +34,7 @@ class FlightPath:
 
       def __repr__(self):
             return f"FlightPath: {self.flightname}, with {len(self.df)} rows."
-      
+
       def separate_legs(self):
             """
             Separate the flight path into takeoff, cruise, and landing phases.
@@ -58,16 +59,16 @@ def load_flight_paths_obj() -> list[FlightPath]:
                   flight_paths.append(df)
       return flight_paths
 
-def load_flight_paths() -> dict[pd.DataFrame]:
+def load_flight_paths(path="./output") -> dict[pd.DataFrame]:
       """
       Load all flight paths from the output folder.
       Add a gap column to the dataframes to indicate points with a time gap greater than TIME_GAP.
       Return a dictionary of flight paths.
       """
       flight_paths = {}
-      for file in os.listdir('./output'):
+      for file in os.listdir(path):
             if file.endswith('.csv'):
-                  file_path = os.path.join('./output', file)
+                  file_path = os.path.join(path, file)
                   df = pd.read_csv(file_path)
                   df["time"] = pd.to_datetime(df["time"])
                   print(f"Loaded {file} with {len(df)} rows.")
@@ -167,7 +168,7 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
                         time_gap = (times[i] - times[i - vel_sample_size]).total_seconds()
                         distance_travelled = 0
                         for j in range(i - vel_sample_size, i):
-                                distance_travelled += geodesic((lats[j], lons[j]), (lats[j + 1], lons[j + 1])).meters
+                              distance_travelled += geodesic((lats[j], lons[j]), (lats[j + 1], lons[j + 1])).meters
                         distance_travelled = np.round(distance_travelled)
                         displacement = np.round(geodesic((lats[i - vel_sample_size], lons[i - vel_sample_size]), (lats[i], lons[i])).meters)
                         speed_step = np.round((displacement / time_gap))
@@ -264,56 +265,74 @@ def plot_cartopy(flight_paths):
       plt.show()
 
 def detail_plot(flight_paths):
+      # Define the center as the final lat and lon value of the first flight path
+      first_flight_path = next(iter(flight_paths.values()))
+      cen_lat = first_flight_path['lat'].iloc[-1]
+      cen_lon = first_flight_path['lon'].iloc[-1]
 
-      # Define the area around Heathrow
-      cen_lat, cen_lon = 52.3105, 4.7683
-      # cen_lat, cen_lon = 51.4700, -0.4543
-      size_lat = 0.1
-      size_lon = 0.15
+      # Define the size of the plot area
+      plot_size_nm = 65
+      lat_step = plot_size_nm * 1.852 / 110.574
+      lon_step = plot_size_nm * 1.852 / (111.320 * np.cos(np.radians(cen_lat)))
 
       # Filter points within the plot area
       lat = []
       lon = []
       velocities = []
+      altitudes = []
       for flight_path_name, flight_path in flight_paths.items():
             mask = (
-                    (flight_path['lat'] >= cen_lat - size_lat) &
-                    (flight_path['lat'] <= cen_lat + size_lat) &
-                    (flight_path['lon'] >= cen_lon - size_lon) &
-                    (flight_path['lon'] <= cen_lon + size_lon)
+                  (flight_path['lat'] >= cen_lat - lat_step) &
+                  (flight_path['lat'] <= cen_lat + lat_step) &
+                  (flight_path['lon'] >= cen_lon - lon_step) &
+                  (flight_path['lon'] <= cen_lon + lon_step)
             )
             lat.extend(flight_path['lat'][mask])
             lon.extend(flight_path['lon'][mask])
             velocities.extend(flight_path['velocity'][mask])
+            altitudes.extend(flight_path['geoaltitude'][mask])
 
       # Create a GeoDataFrame for the scatter points
-      gdf_points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(lon, lat), crs="EPSG:4326")
+      gdf_flight_points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(lon, lat), crs="EPSG:4326")
+      gdf_flight_points = gdf_flight_points.to_crs(epsg=3857)
 
-      # Convert to Web Mercator for compatibility with contextily
-      gdf_points = gdf_points.to_crs(epsg=3857)
+      # Create a circle of points around the center point
+      radius = 50 * 1852  # 50 nautical miles in meters
+      num_points = 100
+      angles = np.linspace(0, 2 * np.pi, num_points)
+      circle_points = []
+      for angle in angles:
+            destination = geodesic(meters=radius).destination((cen_lat, cen_lon), np.degrees(angle))
+            circle_points.append((destination.longitude, destination.latitude))
+
+      # Create a GeoDataFrame for the circle points
+      gdf_circle = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in circle_points], crs="EPSG:4326")
+      gdf_circle = gdf_circle.to_crs(epsg=3857)
 
       # Plot the scatter points
-      fig, ax = plt.subplots(figsize=(10, 10))
-      gdf_points.plot(ax=ax, color='blue', marker='.', markersize=5, label='Locations', alpha=0.7)
+      fig, ax = plt.subplots(figsize=(6, 6))
+      scatter = ax.scatter(gdf_flight_points.geometry.x, gdf_flight_points.geometry.y, c=altitudes, cmap='viridis', marker='.', s=5, alpha=0.7, vmin=0, vmax=12000)
+      cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',fraction=0.046, pad=0.04) #, pad=0.01, aspect=50
+      cbar.set_label('Altitude (m)')
+      # Plot the circle points
+      ax.plot(gdf_circle.geometry.x, gdf_circle.geometry.y, color='red', linestyle='-', linewidth=1.5, alpha=0.7)
 
       # Add a basemap
-      ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom=14)
+      ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom=8)
 
-      # Add title and legend
+      # Plot settings
+      minx, miny, maxx, maxy = gdf_flight_points.total_bounds
+      ax.set_xlim(minx, maxx)
+      ax.set_ylim(miny, maxy)
+      ax.set_aspect('equal', adjustable='box')
       ax.set_axis_off()
-      plt.title('Flight Paths around Heathrow')
-      plt.legend()
+      plt.legend(['Flight Paths', '50 Nautical Mile Radius'], loc='upper right')
+      # plt.title('Flight Paths around Heathrow')
+      plt.savefig("test.png",bbox_inches='tight', dpi = 300)
       plt.show()
 
-
-
-
-      
-
-
-flight_paths = load_flight_paths()
+flight_paths = load_flight_paths("output_ams")
 flight_paths = interpolate_great_circle(flight_paths)
 vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
-# plot_cartopy(flight_paths)
-
-# detail_plot(flight_paths)
+plot_cartopy(flight_paths)
+detail_plot(flight_paths)
