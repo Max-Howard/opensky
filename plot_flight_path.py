@@ -70,7 +70,6 @@ def load_flight_paths(path="./output") -> dict[pd.DataFrame]:
             if file.endswith('.csv'):
                   file_path = os.path.join(path, file)
                   df = pd.read_csv(file_path)
-                  df["time"] = pd.to_datetime(df["time"])
                   print(f"Loaded {file} with {len(df)} rows.")
                   flight_paths[file.replace('.csv', '')] = df
       return flight_paths
@@ -91,7 +90,7 @@ def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
 
 
             # Find time gaps greater than TIME_GAP
-            time_gaps = df["time"].diff().dt.total_seconds() > TIME_GAP
+            time_gaps = df["time"].diff() > TIME_GAP
             gap_indexes = time_gaps[time_gaps].index.tolist()
 
             df["interpolated"] = False
@@ -101,9 +100,9 @@ def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
                   idx_corr = idx + added_rows # Corrected index to account for added rows
                   start_row = df.iloc[idx_corr - 1]
                   end_row = df.iloc[idx_corr]
-                  start_time = pd.to_datetime(start_row["time"])
-                  end_time = pd.to_datetime(end_row["time"])
-                  gap_total_seconds = (end_time - start_time).total_seconds()
+                  start_time = start_row["time"]
+                  end_time = end_row["time"]
+                  gap_total_seconds = (end_time - start_time)
 
                   # Initialize the geodesic line
                   geod = Geodesic.WGS84
@@ -113,9 +112,7 @@ def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
 
                   print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(gap_indexes)}, in {flight_name}, at index {idx}.")
 
-                  time_intervals = pd.date_range(start_time, end_time, periods=num_points + 2)[1:-1]
-
-
+                  time_intervals = np.linspace(start_time, end_time, num_points + 2)[1:-1]
                   step = gap_total_distance / (num_points + 1)
                   lat_intervals = []
                   lon_intervals = []
@@ -153,26 +150,26 @@ def analyse_data(flight_paths, time_gap_thresh=60, vel_mismatch_thresh=10, vel_s
       vel_mismatch_lat = []
       vel_mismatch_lon = []
       for flight_path_name, flight_path in flight_paths.items():
-            times = pd.to_datetime(flight_path['time'])
-            # times = pd.to_datetime(flight_path['lastposupdate'], unit='s')
+            times = flight_path['time']
             lats = flight_path['lat']
             lons = flight_path['lon']
             num_vel_mismatch = 0
 
             for i in range(1, len(times)):
-                  time_gap = (times[i] - times[i - 1]).total_seconds()
+                  time_gap = (times[i] - times[i - 1])
                   distance_travelled = np.round(geodesic((lats[i - 1], lons[i - 1]), (lats[i], lons[i])).meters)
-                  if time_gap < 0:
-                        print(f"""Negative time jump in flight path {flight_path_name}, between indexes {i-1} and {i}.\n""")
+                  if time_gap <= 0:
+                        print(f"""Negative time jump ({time_gap}) in flight path {flight_path_name}, between indexes {i-1} and {i}.\n""")
                   elif time_gap > time_gap_thresh:
-                        print(f"""Large time gap in flight path {flight_path_name}, between indexes {i-1} and {i}.\n"""
-                              f"""Time gap: {time_gap} seconds, distance gap: {distance_travelled/1000} km\n""")
+                        pass
+                        # print(f"""Large time gap in flight path {flight_path_name}, between indexes {i-1} and {i}.\n"""
+                        #       f"""Time gap: {time_gap} seconds, distance gap: {distance_travelled/1000} km\n""")
                   elif abs((distance_travelled / time_gap) - flight_path['velocity'][i]) > 10:   # Velocity check over 1 index
                         num_vel_mismatch += 1
                         # print(f"Velocity mismatch at index {i} in {flight_path_name}.\n"
                         #       f"Calculated velocity: {distance_travelled / time_gap} m/s, reported velocity: {flight_path['velocity'][i]} m/s\n")
                   elif i % vel_sample_size == 0:                                          # Every vel_sample_size indexes, check velocity over sample
-                        time_gap = (times[i] - times[i - vel_sample_size]).total_seconds()
+                        time_gap = (times[i] - times[i - vel_sample_size])
                         distance_travelled = 0
                         for j in range(i - vel_sample_size, i):
                               distance_travelled += geodesic((lats[j], lons[j]), (lats[j + 1], lons[j + 1])).meters
