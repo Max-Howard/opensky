@@ -8,7 +8,7 @@ trino = Trino()
 
 scanning_stop = datetime.now()
 scanning_start = scanning_stop - timedelta(days=100)
-REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "onground", "baroaltitude", "geoaltitude", "lastposupdate", "icao24"] # lastcontact
+REQUESTED_COLUMNS = ["time", "lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude", "lastposupdate"] # lastcontact,  "onground", "icao24"
 PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
 PATH_AIRPORT_ICAO_NAMES = "airports.csv"
 FLIGHT_DATA_PATH = "output"
@@ -47,18 +47,17 @@ def clean_save_dir(backup=True):
         os.makedirs(FLIGHT_DATA_PATH)
         with open(os.path.join(FLIGHT_DATA_PATH, ".gitignore"), "w") as gitignore_file:
             gitignore_file.write("*")
-        print(f"Created {FLIGHT_DATA_PATH}")
+        print(f"Created {FLIGHT_DATA_PATH} folder for storing flight data")
 
 def clean_flight_data(flight_path: pd.DataFrame):
     initial_length = len(flight_path)
     flight_path = flight_path.dropna()                                  # Drop rows with missing data
+    len_after_empty_rm = len(flight_path)
+    flight_path = flight_path.sort_values(by='lastposupdate')           # Sort by time
     flight_path = flight_path[flight_path['lastposupdate'].diff() != 0] # Drop rows with without position update
-    flight_path = flight_path.drop(columns=['lastposupdate'])           # lastposupdate is no longer needed
-    flight_path = flight_path.sort_values(by='time')                    # Sort by time
+    # flight_path = flight_path.drop(columns=['lastposupdate'])           # lastposupdate is no longer needed
     flight_path = flight_path.reset_index(drop=True)                    # Reset index
-    rows_removed = initial_length - len(flight_path)
-    if rows_removed > 0:
-        print(f"Removed {rows_removed} of {initial_length} rows due to missing or repeated data")
+    len_after_duplicates_rm = len(flight_path)
 
     # Remove rows where the data makes a jump larger than normal
     # TODO implement a more sophisticated filter including other parameters
@@ -73,15 +72,21 @@ def clean_flight_data(flight_path: pd.DataFrame):
     altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
 
     # Filter out rows with unrealistic jumps
-    initial_length = len(flight_path)
     flight_path = flight_path[altitude_change_rate <= MAX_VERT_RATE]
-    rows_removed = initial_length - len(flight_path)
-    if rows_removed > 0:
-        print(f"Removed {rows_removed} rows due to unrealistic altitude change rate")
+    len_after_anomalies_rm = len(flight_path)
+
+    if initial_length - len_after_anomalies_rm > 0:
+        rm_empty = initial_length - len_after_empty_rm
+        rm_duplicates = len_after_empty_rm - len_after_duplicates_rm
+        rm_anomalies = len_after_duplicates_rm - len_after_anomalies_rm
+        print(f"Initial length: {initial_length}, final length: {len_after_anomalies_rm}, total removed: {initial_length - len_after_anomalies_rm}")
+        print(f"Removed {rm_empty} rows due to missing data, {rm_duplicates} rows due to duplicate data and {rm_anomalies} rows due to anomalies")
 
     return flight_path
 
 def load_flight_adsb(flight_counts):
+
+    aircraft_db_clean = pd.read_csv("aircraft_db_clean.csv")
 
     for i in range(len(flight_counts)):
         flight_to_import = flight_counts.iloc[i]
@@ -91,30 +96,51 @@ def load_flight_adsb(flight_counts):
                 print(f"Searching for {flight_to_import['count']} flight(s) ",
                     f"from {flight_to_import['origin_name']} to ",
                     f"{flight_to_import['destination_name']} without typecode")
+                flight_durations = trino.flightlist(
+                    scanning_start,
+                    scanning_stop,
+                    departure_airport=flight_to_import["origin"],
+                    arrival_airport=flight_to_import["destination"],
+                    limit=flight_to_import["count"])    # Limit the number of flights to import to the count in the CSV
+                if type(flight_durations) is not pd.DataFrame:
+                        print("Could not find flight.\n")
+                        continue
             else:
                 raise NotImplementedError("Typecode is a float, but not NaN")
         else:
-            raise NotImplementedError("Cannot sort by typecode")
+            # raise NotImplementedError("Cannot sort by typecode")
             print(f"Searching for {flight_to_import['count']} flight(s) ",
                   f"from {flight_to_import['origin_name']} to ",
                   f"{flight_to_import['destination_name']} ",
                   f"with typecode {flight_to_import['typecode']}")
+            number_to_import = max(flight_to_import["count"]*5, 50) # Need to import to find the correct typecode
 
-        # Trino seems to handle the case where the typecode is None, so we can just pass it in
-        flight_durations = trino.flightlist(
-            scanning_start,
-            scanning_stop,
-            departure_airport=flight_to_import["origin"],
-            arrival_airport=flight_to_import["destination"],
-            icao24=flight_to_import["typecode"],
-            limit=flight_to_import["count"])    # Limit the number of flights to import to the count in the CSV
+            flight_durations = trino.flightlist(
+                scanning_start,
+                scanning_stop,
+                departure_airport=flight_to_import["origin"],
+                arrival_airport=flight_to_import["destination"],
+                limit=number_to_import)
 
-        if type(flight_durations) is not pd.DataFrame:
-            print("Could not find flight.\n")
-            continue
+            if flight_durations is not None:
+                list_start = flight_durations['firstseen'].min()
+                list_stop = flight_durations['lastseen'].max()
+                flight_durations = flight_durations.merge(
+                    aircraft_db_clean[['icao24', 'typecode']],
+                    on='icao24',
+                    how='left'
+                )
+                flight_durations = flight_durations[flight_durations['typecode'] == flight_to_import['typecode']]
 
-        print(f"Found {len(flight_durations)}/{flight_to_import['count']} flights ",
-              f"from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}")
+                if len(flight_durations) >= flight_to_import["count"]:
+                    flight_durations = flight_durations.head(flight_to_import["count"])
+                    print("Found all flights.")
+                else:
+                    print(f"Found {len(flight_durations)}/{flight_to_import['count']} flights.")
+                    print(f"Searched {number_to_import} flights, from {scanning_start} to {scanning_stop}, actual period (due to number limit): {list_start} to {list_stop}")
+            else:
+                print("Could not find flight(s).\n")
+                continue
 
         for i in range(len(flight_durations)):
             data_start = flight_durations.iloc[i, flight_durations.columns.get_loc("firstseen")]
@@ -129,11 +155,11 @@ def load_flight_adsb(flight_counts):
             
             flight_path = clean_flight_data(flight_path)
 
-            flight_path["origin"] = flight_to_import["origin"]
-            flight_path["destination"] = flight_to_import["destination"]
-            # TODO store the typecode in the dataframe as well
+            # flight_path["origin"] = flight_to_import["origin"]
+            # flight_path["destination"] = flight_to_import["destination"]
+            # flight_path["typecode"] = flight_to_import["typecode"]
 
-            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{i+1}.csv"""
+            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{i+1}.csv"""
             flight_path.to_csv(filename, index=False)
             print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}\n""")
 
