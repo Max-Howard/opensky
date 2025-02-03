@@ -94,23 +94,33 @@ def load_flight_adsb(flight_counts):
             if np.isnan(flight_to_import["typecode"]):  # NaN indicates no specified typecode
                 print(f"Searching for {flight_to_import['count']} flight(s) ",
                     f"from {flight_to_import['origin_name']} to ",
-                    f"{flight_to_import['destination_name']} without typecode")
+                    f"{flight_to_import['destination_name']} without typecode specified")
                 flight_durations = trino.flightlist(
                     scanning_start,
                     scanning_stop,
                     departure_airport=flight_to_import["origin"],
                     arrival_airport=flight_to_import["destination"],
-                    limit=flight_to_import["count"])    # Limit the number of flights to import to the count in the CSV
+                    limit=flight_to_import["count"]*2)    # Limit the number of flights to import to the count in the CSV
                 if type(flight_durations) is not pd.DataFrame:
                         print("Could not find flight.\n")
                         continue
+                flight_durations = flight_durations.merge(aircraft_db_clean[['icao24', 'typecode']],on='icao24',how='left')
+                initial_length = len(flight_durations)
+                flight_durations = flight_durations.dropna(subset=['typecode'])
+                final_length = len(flight_durations)
+                removed_count = initial_length - final_length
+                if removed_count > 0:
+                    print(f"Removed {removed_count} flights due to missing typecode in database.")
+                if len(flight_durations) >= flight_to_import["count"]:
+                    flight_durations = flight_durations.head(flight_to_import["count"])
+                print(f"Found {len(flight_durations)}/{flight_to_import['count']} flights, with typecodes: {flight_durations['typecode'].unique()}\n")
             else:
                 raise NotImplementedError("Typecode is a float, but not NaN")
         else:
             # raise NotImplementedError("Cannot sort by typecode")
-            print(f"Searching for {flight_to_import['count']} flight(s) ",
-                  f"from {flight_to_import['origin_name']} to ",
-                  f"{flight_to_import['destination_name']} ",
+            print(f"Searching for {flight_to_import['count']} flight(s)",
+                  f"from {flight_to_import['origin_name']} to",
+                  f"{flight_to_import['destination_name']}",
                   f"with typecode {flight_to_import['typecode']}")
             number_to_import = max(flight_to_import["count"]*5, 50) # Need to import to find the correct typecode
 
@@ -129,6 +139,7 @@ def load_flight_adsb(flight_counts):
                     on='icao24',
                     how='left'
                 )
+                num_found = len(flight_durations)
                 flight_durations = flight_durations[flight_durations['typecode'] == flight_to_import['typecode']]
 
                 if len(flight_durations) >= flight_to_import["count"]:
@@ -136,7 +147,10 @@ def load_flight_adsb(flight_counts):
                     print("Found all flights.")
                 else:
                     print(f"Found {len(flight_durations)}/{flight_to_import['count']} flights.")
-                    print(f"Searched {number_to_import} flights, from {scanning_start} to {scanning_stop}, actual period (due to number limit): {list_start} to {list_stop}")
+                    if num_found >= number_to_import:
+                        print(f"Limited by max number of flights to import ({number_to_import}). Time period due to limit: {list_start} to {list_stop}.\n")
+                    else:
+                        print(f"Limited by time period. Time period: {list_start} to {list_stop}. Only searched {num_found} flights, out of {number_to_import} limit.\n")
             else:
                 print("Could not find flight(s).\n")
                 continue
@@ -145,6 +159,7 @@ def load_flight_adsb(flight_counts):
             data_start = flight_durations.iloc[i, flight_durations.columns.get_loc("firstseen")]
             data_stop = flight_durations.iloc[i, flight_durations.columns.get_loc("lastseen")]
             icao24 = flight_durations.iloc[i, flight_durations.columns.get_loc("icao24")]
+            typecode = flight_durations.iloc[i, flight_durations.columns.get_loc("typecode")]
 
             print(f"Loading path for flight number {i+1}, time period: {data_start} to {data_stop}")
 
@@ -155,7 +170,7 @@ def load_flight_adsb(flight_counts):
 
             flight_path = clean_flight_data(flight_path)
             flight_path = flight_path.rename(columns={"lastposupdate": "time"})
-            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{icao24}_{i+1}.csv"""
+            filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{typecode}_{icao24}_{i+1}.csv"""
             flight_path.to_csv(filename, index=False)
             print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}\n""")
 
