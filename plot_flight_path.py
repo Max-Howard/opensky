@@ -13,11 +13,12 @@ from shapely.geometry import Point
 
 
 TIME_GAP = 60
+ALT_GAP_MAX = 100 # Maximum altitude gap in meters before interpolation
 CRUISE_STEP = 50 * 1852       # 50 nautical miles in meters
 DELTA_ALT_CRUISE = 3000 * 0.3048    # 3000 ft in meters
 DELTA_ALT_CRUISE = 16000 * 0.3048    # 16000 ft in meters
 FT_TO_M = 0.3048
-AIRPORT_NAMES = pd.read_csv("airports.csv")
+AIRPORT_NAMES = pd.read_csv("airports.csv").set_index("icao")
 
 def fixed_spacing_floats(s, fmt, nan_value=np.nan):
     """
@@ -120,47 +121,6 @@ def read_ptf(filepath):
     
     return ptf
 
-class FlightPath:
-      def __init__(self, flightname:str, df:pd.DataFrame):
-            self.flightname = flightname
-            df["time"] = pd.to_datetime(df["time"])
-            self.icao24 = df["icao24"].iloc[0]
-            self.origin_icao = df["origin"].iloc[0]
-            self.destination_icao = df["destination"].iloc[0]
-            df.drop(columns=["icao24"], inplace=True)
-            df.drop(columns=["origin"], inplace=True)
-            df.drop(columns=["destination"], inplace=True)
-            self.origin_name = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == self.origin_icao]["name"].iloc[0]
-            self.destination_name = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == self.destination_icao]["name"].iloc[0]
-            self.df = df
-
-      def __repr__(self):
-            return f"FlightPath: {self.flightname}, with {len(self.df)} rows."
-
-      def separate_legs(self):
-            """
-            Separate the flight path into takeoff, cruise, and landing phases.
-            """
-            # Find the start and end of the cruise phase
-            cutoff_alt = DELTA_ALT_CRUISE + self.df["geoaltitude"].iloc[0]
-            cruise_start_idx = self.df["geoaltitude"].gt(cutoff_alt).idxmax()
-            cruise_end_idx = self.df["geoaltitude"].gt(cutoff_alt)[::-1].idxmax()
-            self.takeoff = self.df.iloc[:cruise_start_idx]
-            self.cruise = self.df.iloc[cruise_start_idx:cruise_end_idx]
-            self.landing = self.df.iloc[cruise_end_idx:]
-
-      def interpolate_great_circle(self):
-            pass
-
-def load_flight_paths_obj() -> list[FlightPath]:
-      flight_paths = []
-      for filename in os.listdir('./output'):
-            if filename.endswith('.csv'):
-                  file_path = os.path.join('./output', filename)
-                  df = pd.read_csv(file_path)
-                  flight_paths.append(df)
-      return flight_paths
-
 def load_flight_paths(path="./output") -> dict[pd.DataFrame]:
       """
       Load all flight paths from the output folder.
@@ -176,6 +136,14 @@ def load_flight_paths(path="./output") -> dict[pd.DataFrame]:
                   flight_paths[file.replace('.csv', '')] = df
       return flight_paths
 
+def find_ptf_data_from_alt(alt, ac_type):
+            ptf_filepath = f"BADA/{ac_type}__.ptf"
+            ptf = read_ptf(ptf_filepath)
+            ac_data = ptf['table']
+            closest_FL = ac_data.index[np.abs(ac_data.index - alt / 100 / FT_TO_M).argmin()]
+            return ac_data.loc[closest_FL]
+
+
 def clean_alt_data(flight_paths: dict[pd.DataFrame]):
       for name, flight_path in flight_paths.items():
             initial_length = len(flight_path)
@@ -190,68 +158,88 @@ def clean_alt_data(flight_paths: dict[pd.DataFrame]):
       return flight_paths
 
 
-def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
-      for flight_name in flight_paths.keys():
-            df:pd.DataFrame = flight_paths[flight_name]
+# def interpolate_great_circle(flight_paths: dict[pd.DataFrame]):
+#       ALT_GAP_MAX = 100
+#       CLIMB_THRESHOLD = 50 # m Min climb required to separate climb from cruise
+#       for flight_name in flight_paths.keys():
+#             df:pd.DataFrame = flight_paths[flight_name]
 
-            # Find the start and end of the cruise phase
-            cutoff_alt = DELTA_ALT_CRUISE + df["geoaltitude"].iloc[0] # Cruise altitude starts ALT_CRUISE above the first altitude
-            cruise_start_idx = df["geoaltitude"].gt(cutoff_alt).idxmax()
-            cruise_end_idx = df["geoaltitude"].gt(cutoff_alt)[::-1].idxmax()
+#             origin, destination, typecode, icao24, flight_num = flight_name.split('_')
+#             origin_alt = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == origin]["alt"][0]
+#             dest_alt = AIRPORT_NAMES[AIRPORT_NAMES["icao"] == destination]["alt"][0]
+#             # Find the start and end of the cruise phase
+#             non_LTO_idx_start = DELTA_ALT_CRUISE + origin_alt
+#             non_LTO_idx_end = DELTA_ALT_CRUISE + dest_alt
+#             df["interpolated"] = False
 
-            print(f"Found cruise start at index {cruise_start_idx} and end at index {cruise_end_idx}.")
+#             # Find gaps in the altitude data
+#             alt_gaps = df["geoaltitude"].diff().abs() > ALT_GAP_MAX
+#             alt_gap_indexes = alt_gaps[alt_gaps].index.tolist()
 
-            # df = df.drop(df.index[cruise_start_idx:cruise_end_idx]).reset_index(drop=True)
+#             # Find time gaps greater than TIME_GAP
+#             time_gaps = df["time"].diff() > TIME_GAP
+#             time_gap_indexes = time_gaps[time_gaps].index.tolist()
 
+#             combined_gap_indexes = sorted(list(set(alt_gap_indexes + time_gap_indexes)))
+#             added_rows = 0
+#             for gap_num,idx in enumerate(combined_gap_indexes):
 
-            # Find time gaps greater than TIME_GAP
-            time_gaps = df["time"].diff() > TIME_GAP
-            gap_indexes = time_gaps[time_gaps].index.tolist()
+#                   idx_corr = idx + added_rows # Corrected index to account for added rows
+#                   start_row = df.iloc[idx_corr - 1]
+#                   end_row = df.iloc[idx_corr]
+#                   start_time = start_row["time"]
+#                   end_time = end_row["time"]
+#                   gap_total_seconds = (end_time - start_time)
+#                   start_baro_alt = start_row["baroaltitude"]
+#                   end_baro_alt = end_row["baroaltitude"]
+#                   start_geo_alt = start_row["geoaltitude"]
+#                   end_geo_alt = end_row["geoaltitude"]
+#                   cl_rate_required = end_geo_alt - start_geo_alt / gap_total_seconds
+#                   ave_alt = (start_geo_alt + end_geo_alt) / 2
 
-            df["interpolated"] = False
+#                   # Initialize the geodesic line
+#                   geod = Geodesic.WGS84
+#                   line = geod.InverseLine(start_row["lat"], start_row["lon"], end_row["lat"], end_row["lon"])
+#                   gap_total_distance = line.s13
 
-            added_rows = 0
-            for gap_num,idx in enumerate(gap_indexes):
-                  idx_corr = idx + added_rows # Corrected index to account for added rows
-                  start_row = df.iloc[idx_corr - 1]
-                  end_row = df.iloc[idx_corr]
-                  start_time = start_row["time"]
-                  end_time = end_row["time"]
-                  gap_total_seconds = (end_time - start_time)
+#                   data_at_fl = find_ptf_data_from_alt(ave_alt, typecode)
+#                   if start_geo_alt < end_geo_alt - CLIMB_THRESHOLD:
+#                         cl_rate = data_at_fl["ROCDnom_cl"]
+#                         if cl_rate < cl_rate_required:
+#                               climb_time = (end_geo_alt - start_geo_alt) / cl_rate
+#                               climb_velocity = data_at_fl["Vcl"]
+#                         else:
+#                               raise ValueError("Climb rate required is greater than the aircraft's climb rate.")
 
-                  # Initialize the geodesic line
-                  geod = Geodesic.WGS84
-                  line = geod.InverseLine(start_row["lat"], start_row["lon"], end_row["lat"], end_row["lon"])
-                  gap_total_distance = line.s13
-                  num_points = int(np.ceil(gap_total_distance / CRUISE_STEP)) # Number of points to add to fill the gap
+#                   num_points = int(np.ceil(gap_total_distance / CRUISE_STEP)) # Number of points to add to fill the gap
 
-                  print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(gap_indexes)}, in {flight_name}, at index {idx}.")
+#                   print(f"Adding {num_points} points to fill gap {gap_num + 1} of {len(combined_gap_indexes)}, in {flight_name}, at index {idx}.")
 
-                  time_intervals = np.linspace(start_time, end_time, num_points + 2)[1:-1]
-                  step = gap_total_distance / (num_points + 1)
-                  lat_intervals = []
-                  lon_intervals = []
-                  for i in range(1, num_points+1): # Skip the first and last points as they are already in the dataframe
-                        point = line.Position(i * step)
-                        lat_intervals.append(point['lat2'])
-                        lon_intervals.append(point['lon2'])
+#                   time_intervals = np.linspace(start_time, end_time, num_points + 2)[1:-1]
+#                   step = gap_total_distance / (num_points + 1)
+#                   lat_intervals = []
+#                   lon_intervals = []
+#                   for i in range(1, num_points+1): # Skip the first and last points as they are already in the dataframe
+#                         point = line.Position(i * step)
+#                         lat_intervals.append(point['lat2'])
+#                         lon_intervals.append(point['lon2'])
 
-                  velocity_intervals = np.linspace(start_row["velocity"], end_row["velocity"], num_points + 2)[1:-1]
-                  gap_mean_velocity = gap_total_distance / gap_total_seconds
-                  velocity_correction = gap_mean_velocity - np.mean(velocity_intervals)
-                  velocity_intervals += velocity_correction # TODO this may introduce errors in the velocity data
-                  print(f"Added: {velocity_correction}, to interval velocities, to ensure continuity with distance travelled.")
-                  interpolated_rows = pd.DataFrame({
-                              "time": time_intervals,
-                              "lat": lat_intervals,
-                              "lon": lon_intervals,
-                              "velocity": velocity_intervals
-                  })
-                  interpolated_rows["interpolated"] = True
-                  added_rows += len(interpolated_rows)
-                  df = pd.concat([df.iloc[:idx_corr], interpolated_rows, df.iloc[idx_corr:]]).reset_index(drop=True)
-            flight_paths[flight_name] = df
-      return flight_paths
+#                   velocity_intervals = np.linspace(start_row["velocity"], end_row["velocity"], num_points + 2)[1:-1]
+#                   gap_mean_velocity = gap_total_distance / gap_total_seconds
+#                   velocity_correction = gap_mean_velocity - np.mean(velocity_intervals)
+#                   velocity_intervals += velocity_correction # TODO this may introduce errors in the velocity data
+#                   print(f"Added: {velocity_correction}, to interval velocities, to ensure continuity with distance travelled.")
+#                   interpolated_rows = pd.DataFrame({
+#                               "time": time_intervals,
+#                               "lat": lat_intervals,
+#                               "lon": lon_intervals,
+#                               "velocity": velocity_intervals
+#                   })
+#                   interpolated_rows["interpolated"] = True
+#                   added_rows += len(interpolated_rows)
+#                   df = pd.concat([df.iloc[:idx_corr], interpolated_rows, df.iloc[idx_corr:]]).reset_index(drop=True)
+#             flight_paths[flight_name] = df
+#       return flight_paths
 
 def find_time_diff(flight_paths):
       for flight_name, df in flight_paths.items():
@@ -349,6 +337,9 @@ def plot_cartopy(flight_paths, color_by="velocity"):
       # Plot the flight paths
       for flight_path_name, flight_path in flight_paths.items():
 
+            if flight_path_name != "OMDB_EGLL_B788_4242f4_1":
+                  continue
+
             # Remove the interpolated points before plotting the scatter points
             if 'interpolated' in flight_path.columns:
                   plt.plot(flight_path['lon'], flight_path['lat'], c='red', linestyle='-', linewidth=0.5, alpha=0.7) #, label=f'{flight_path_name} Path'
@@ -435,7 +426,7 @@ def detail_plot(flight_paths):
       plt.savefig("test.png",bbox_inches='tight', dpi = 300)
       plt.show()
 
-def altitude_plot(flight_paths):
+def baro_vs_geo_altitude_plot(flight_paths):
       plt.figure(figsize=(10, 5))
       for flight_path_name, flight_path in flight_paths.items():
             time_series = (flight_path['time'] - flight_path["time"][0]) / 60**2
@@ -447,42 +438,97 @@ def altitude_plot(flight_paths):
       plt.ylabel("Altitude (m)")
       plt.show()
 
+
+def altitude_plot(flight_paths):
+      plt.figure(figsize=(10, 5))
+      colors = plt.cm.get_cmap('tab10', len(flight_paths))
+      for i, (flight_path_name, flight_path) in enumerate(flight_paths.items()):
+            bada_timestep = 1
+            bada_times = np.arange(0, flight_path["time"].iloc[-1]-flight_path["time"][0], bada_timestep) / 60**2
+            ac_type = flight_path_name.split("_")[2]
+            ptf_filepath = f"BADA/{ac_type}__.ptf"
+            ptf = read_ptf(ptf_filepath)
+            ac_data = ptf['table']
+            alt_start = flight_path["geoaltitude"].iloc[0]
+            alt_stop = flight_path["geoaltitude"].iloc[-1]
+            alt_cruise = max(flight_path["geoaltitude"])
+
+            bada_climb_alts = [alt_start]
+            current_alt = bada_climb_alts[0]
+            while current_alt < alt_cruise:
+                  current_FL = current_alt / 100 * FT_TO_M
+                  closest_FL = ac_data.index[np.abs(ac_data.index - current_FL).argmin()]
+                  bada_vert_rate = ac_data.loc[closest_FL, "ROCDnom_cl"]
+                  bada_climb_alts.append(current_alt)
+                  current_alt += bada_timestep * bada_vert_rate * FT_TO_M / 60
+
+            bada_decent_alts = [alt_stop]
+            current_alt = bada_decent_alts[0]
+            while current_alt < alt_cruise:
+                  current_FL = current_alt / 100 * FT_TO_M
+                  closest_FL = ac_data.index[np.abs(ac_data.index - current_FL).argmin()]
+                  bada_vert_rate = ac_data.loc[closest_FL,"ROCDnom_des"]
+                  bada_decent_alts.append(current_alt)
+                  current_alt += bada_timestep * bada_vert_rate * FT_TO_M / 60
+            
+            num_points_cruise = len(bada_times) - (len(bada_climb_alts) + len(bada_decent_alts))
+            bada_cruise_alts = np.linspace(alt_cruise, alt_cruise, num_points_cruise)
+            bada_decent_alts = bada_decent_alts[::-1]
+            bada_alts = np.concatenate([bada_climb_alts, bada_cruise_alts, bada_decent_alts])
+            print(f"Length of BADA altitudes. Cruise: {len(bada_cruise_alts)}, Climb: {len(bada_climb_alts)}, Descent: {len(bada_decent_alts)}")
+
+            time_series = (flight_path['time'] - flight_path["time"][0]) / 60**2
+            # plt.plot(time_series, flight_path['baroaltitude'], label=f"Interolated {flight_path_name}", color=colors(i))
+            plt.plot(bada_times, bada_alts, label=f"{ac_type} BADA {flight_path_name}", color=colors(i), linestyle='--')
+            plt.scatter(time_series, flight_path['baroaltitude'], s=5, marker='x', color=colors(i), alpha=0.5)
+            # Calculate altitude by integrating vertical rate
+            # integrated_altitude = (np.cumsum(flight_path["vertrate"].fillna(0) * flight_path["time"].diff().fillna(0))) + flight_path["baroaltitude"].iloc[0]
+            # plt.plot(time_series, integrated_altitude, label=f"Integrated Altitude {flight_path_name}", linestyle='-.', color=colors(i))
+      plt.legend()
+      plt.xlabel("Time (hours)")
+      plt.ylabel("Baro Altitude (m)")
+      plt.show()
+
 def vert_rate_plot(flight_paths):
       for flight_path_name, flight_path in flight_paths.items():
             plt.figure(figsize=(10, 5))
             avarage_points_count = 60
             time_series = (flight_path['time'] - flight_path["time"][0]) / 60**2
-            plt.scatter(time_series, flight_path['geoaltitude'].diff() / flight_path["time"].diff(), color="orange", s=5, label="Calculated from Geo Altitude")
-            plt.scatter(time_series, flight_path['baroaltitude'].diff() / flight_path["time"].diff(), color="blue", s=5, label="Calculated from Baro Altitude")
-            plt.scatter(time_series, flight_path["vertrate"], color="green", s=5, label="Reported Vertical Rate")
+            # plt.scatter(time_series, flight_path['geoaltitude'].diff() / flight_path["time"].diff(), color="orange", s=5, label="Calculated from Geo Altitude")
+            # plt.scatter(time_series, flight_path['baroaltitude'].diff() / flight_path["time"].diff(), color="blue", s=5, label="Calculated from Baro Altitude")
+            # plt.scatter(time_series, flight_path["vertrate"], color="green", s=5, label="Reported Vertical Rate")
             
             # Calculate and plot the mean value
-            geo_alt_mean = flight_path['geoaltitude'].diff().rolling(window=avarage_points_count).mean() / flight_path["time"].diff().rolling(window=10).mean()
-            baro_alt_mean = flight_path['baroaltitude'].diff().rolling(window=avarage_points_count).mean() / flight_path["time"].diff().rolling(window=10).mean()
-            vert_rate_mean = flight_path["vertrate"].rolling(window=avarage_points_count).mean()
-            plt.plot(time_series, geo_alt_mean, color="orange", linestyle='--', label="Mean Geo Altitude Rate (10 points)")
-            plt.plot(time_series, baro_alt_mean, color="blue", linestyle='--', label="Mean Baro Altitude Rate (10 points)")
-            plt.plot(time_series, vert_rate_mean, color="green", linestyle='--', label="Mean Reported Vertical Rate (10 points)")
+            # geo_alt_mean = flight_path['geoaltitude'].diff().rolling(window=avarage_points_count).mean() / flight_path["time"].diff().rolling(window=10).mean()
+            # baro_alt_mean = flight_path['baroaltitude'].diff().rolling(window=avarage_points_count).mean() / flight_path["time"].diff().rolling(window=10).mean()
+            # vert_rate_mean = flight_path["vertrate"].rolling(window=avarage_points_count).mean()
+            # plt.plot(time_series, geo_alt_mean, color="orange", linestyle='--', label="Mean Geo Altitude Rate")
+            # plt.plot(time_series, baro_alt_mean, color="blue", linestyle='--', label="Mean Baro Altitude Rate")
+            # plt.plot(time_series, vert_rate_mean, color="green", linestyle='--', label="Mean Reported Vertical Rate)")
 
             # Calculate and plot the median value
             geo_alt_median = flight_path['geoaltitude'].diff().rolling(window=avarage_points_count).median() / flight_path["time"].diff().rolling(window=10).median()
             baro_alt_median = flight_path['baroaltitude'].diff().rolling(window=avarage_points_count).median() / flight_path["time"].diff().rolling(window=10).median()
             vert_rate_median = flight_path["vertrate"].rolling(window=avarage_points_count).median()
-            plt.plot(time_series, geo_alt_median, color="orange", linestyle='-', label="Median Geo Altitude Rate (10 points)")
-            plt.plot(time_series, baro_alt_median, color="blue", linestyle='-', label="Median Baro Altitude Rate (10 points)")
-            plt.plot(time_series, vert_rate_median, color="green", linestyle='-', label="Median Reported Vertical Rate (10 points)")
+            plt.plot(time_series, geo_alt_median, color="orange", linestyle='-', label="Median Geo Altitude Rate")
+            plt.plot(time_series, baro_alt_median, color="blue", linestyle='-', label="Median Baro Altitude Rate")
+            plt.plot(time_series, vert_rate_median, color="green", linestyle='-', label="Median Reported Vertical Rate")
 
             plt.legend()
             plt.title("Altitude Rate vs Time for " + flight_path_name)
             plt.xlabel("Time (hours)")
             plt.ylabel("Altitude Rate (m/s)")
             plt.ylim(-25, 25)
-            plt.text(0.5, 0.95, 'Vertical rate limited to [-25, 25] m/s', 
+            plt.text(0.5, 0.95, 'Vertical rate axis limited to [-25, 25] m/s', 
+                         horizontalalignment='center', verticalalignment='center', 
+                         transform=plt.gca().transAxes, fontsize=10, color='red')
+            plt.text(0.5, 0.9, f'Median values calculated over {avarage_points_count} points', 
                          horizontalalignment='center', verticalalignment='center', 
                          transform=plt.gca().transAxes, fontsize=10, color='red')
             plt.show()
 
 def vert_rate_vs_altitude(flight_paths):
+      avarage_points_count = 5
       for flight_path_name, flight_path in flight_paths.items():
             plt.figure(figsize=(10, 5))
             ac_type = flight_path_name.split("_")[2]
@@ -490,7 +536,18 @@ def vert_rate_vs_altitude(flight_paths):
             ptf = read_ptf(ptf_filepath)
             ac_data = ptf['table']
             time_series = (flight_path['time'] - flight_path["time"][0]) / 60**2
-            plt.scatter(flight_path['geoaltitude'], flight_path["vertrate"], s=5, label="Altitude Rate", c="orange")
+            geo_rate_alt_median = flight_path['geoaltitude'].diff().rolling(window=avarage_points_count).median() / flight_path["time"].diff().rolling(window=10).median()
+            baro_rate_alt_median = flight_path['baroaltitude'].diff().rolling(window=avarage_points_count).median() / flight_path["time"].diff().rolling(window=10).median()
+            sc1 = plt.scatter(flight_path['geoaltitude'], flight_path["vertrate"], s=8, c=time_series, cmap='plasma', marker='x', label="ADS-B Altitude Rate vs GPS Altitude", alpha=1)
+            sc2 = plt.scatter(flight_path['geoaltitude'], geo_rate_alt_median, s=8, c=time_series, cmap='plasma', marker='o', label=f"GPS Altitude Rate vs GPS Altitude (Median over {avarage_points_count} values)", alpha=1)
+            cbar = plt.colorbar(sc1, orientation='vertical', pad=0.01)
+            cbar.set_label('Time (h) for geoaltitude points')
+
+            sc3 = plt.scatter(flight_path['baroaltitude'], flight_path["vertrate"], s=8, c=time_series, cmap='viridis', marker='x', label="ADS-B Altitude Rate vs Baro Altitude", alpha=1)
+            sc4 = plt.scatter(flight_path['baroaltitude'], baro_rate_alt_median, s=8, c=time_series, cmap='viridis', marker='o', label=f"Baro Altitude Rate vs Baro Altitude (Median over {avarage_points_count} values)", alpha=1)
+            cbar = plt.colorbar(sc3, orientation='vertical', pad=0.01)
+            cbar.set_label('Time (h) for baroaltitude points')
+
             plt.plot(ac_data.index * 100 * FT_TO_M, ac_data["ROCDhi_cl"] * FT_TO_M/ 60, label="BADA High Load Climb Rate", c = "red")
             plt.plot(ac_data.index * 100 * FT_TO_M, ac_data["ROCDnom_cl"] * FT_TO_M/ 60, label="BADA Nominal Load Climb Rate", c = "green")
             plt.plot(ac_data.index * 100 * FT_TO_M, ac_data["ROCDlo_cl"] * FT_TO_M/ 60, label="BADA Low Climb Load Rate", c = "purple")
@@ -498,6 +555,10 @@ def vert_rate_vs_altitude(flight_paths):
             plt.xlabel("Altitude (m)")
             plt.ylabel("Altitude Rate (m/s)")
             plt.title(f"{flight_path_name} Altitude Rate vs Altitude (geo alt for measured rate)")
+            plt.ylim(-25, 25)
+            plt.text(0.5, 0.95, 'Vertical rate axis limited to [-25, 25] m/s', 
+                         horizontalalignment='center', verticalalignment='center', 
+                         transform=plt.gca().transAxes, fontsize=10, color='red')
             plt.legend()
             plt.show()
 
@@ -505,12 +566,13 @@ flight_paths = load_flight_paths("output")
 
 
 
-# flight_paths = interpolate_great_circle(flight_paths)
+flight_paths = interpolate_great_circle(flight_paths)
 # vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
 # detail_plot(flight_paths)
 
 flight_paths = clean_alt_data(flight_paths)
-# plot_cartopy(flight_paths, color_by="geoaltitude")
+print(flight_paths.keys())
+plot_cartopy(flight_paths, color_by="geoaltitude")
 # altitude_plot(flight_paths)
-vert_rate_plot(flight_paths)
-vert_rate_vs_altitude(flight_paths)
+# vert_rate_plot(flight_paths)
+# vert_rate_vs_altitude(flight_paths)
