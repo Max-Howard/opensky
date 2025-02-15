@@ -1,26 +1,42 @@
 {
     "cSpell.words": [
         "adsb",
+        "alts",
+        "bada",
         "baro",
         "baroaltitude",
         "Carree",
         "ccrs",
         "cfeature",
         "contextily",
+        "Dnom",
         "dropna",
         "EGLL",
         "EGPF",
         "EHAM",
         "fcount",
         "fcounts",
+        "fnom",
         "geod",
         "icao",
+        "idxs",
+        "irow",
         "KDEN",
         "lats",
         "lons",
         "Mapnik",
+        "Mdes",
+        "mnom",
         "onground",
+        "Vdes",
         "vmax",
         "vmin"
+    ],
+    "cSpell.ignorePaths": [
+        ".vscode",
+        ".git",
+        "BADA",
+        "airports.csv",
+        "cruise_fl.csv"
     ]
 }
