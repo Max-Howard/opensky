@@ -2,7 +2,10 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 from geographiclib.geodesic import Geodesic
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 geod = Geodesic.WGS84
 
@@ -140,7 +143,6 @@ class FlightPath:
             self.df = pd.read_pickle(filepath)
         else:
             raise ValueError("File must be either a .csv or .pkl file.")
-        self.df["interpolated"] = False
         self.filepath = filepath
         origin, destination, typecode, icao24, flight_num = filename.rsplit(".", 1)[0].split("_")
         self.origin_icao = origin
@@ -154,12 +156,34 @@ class FlightPath:
         self.destination_name = self.destination_ap_data["name"]
         self.ac_data = read_ptf(f"./BADA/{self.typecode}__.ptf")
         self.bada_df = None
+        self.interp_df = None
         self.time_gaps = self.df["time"].diff()
         if max(max(self.df["baroaltitude"]), max(self.df["geoaltitude"])) > self.ac_data["hMO"]:
             input(f"Warning: Flight {self.flight_num} exceeds maximum altitude of {self.ac_data['hMO']}, please acknowledge.")
+        self._find_distance_travelled()
+        print(f"Flight imported from {filename}.")
 
     def __repr__(self):
-        return f"\nFlightPath Object\nFrom: {self.origin_name}, To: {self.destination_name}, Typecode: {self.typecode}\nicao24: {self.icao24}, flight number: {self.flight_num}, containing {len(self.df)} rows."
+        return f"\nFlightPath Object\nFrom: {self.origin_name}, To: {self.destination_name}, Typecode: {self.typecode}\nTakeoff: {self.df['time'].iloc[0]}, Landing: {self.df['time'].iloc[-1]}, Duration: {self.df['time'].iloc[-1] - self.df['time'].iloc[0]} seconds\nicao24: {self.icao24}, flight number: {self.flight_num}, containing {len(self.df)} rows."
+
+    def combine_df(self):
+        interplated_df = self.interp_df.copy()
+        real_df = self.df.copy()
+        interplated_df["interpolated"] = True
+        real_df["interpolated"] = False
+        combined_df = pd.concat([interplated_df, real_df], ignore_index=True)
+        combined_df.sort_values(by="time", inplace=True)
+        combined_df.reset_index(drop=True, inplace=True)
+        return combined_df
+
+    def _find_distance_travelled(self):
+        distances = [0]
+        for i in range(1, len(self.df)):
+            prev_point = self.df.iloc[i - 1]
+            curr_point = self.df.iloc[i]
+            distance = geod.Inverse(prev_point["lat"], prev_point["lon"], curr_point["lat"], curr_point["lon"])["s12"]
+            distances.append(distances[-1] + distance)
+        self.df["distance"] = distances
 
     def find_ac_perf(self, altitude) -> pd.Series:
         """
@@ -225,6 +249,7 @@ class FlightPath:
                     "lon": current_lon,
                     "vertrate": vertrate,
                     "velocity": velocity,
+                    "distance": climb_distance_travelled,
                 }
             )
             current_alt += BADA_PLOT_TIME_STEP * vertrate
@@ -235,6 +260,7 @@ class FlightPath:
         decent_distance_travelled = 0
         current_alt = alt_stop
 
+        decent_distances = []
         while current_alt < alt_cruise:
             bada_perf = self.find_ac_perf(current_alt)
             velocity = bada_perf["Vdes"] * KTS_TO_MPS
@@ -242,6 +268,7 @@ class FlightPath:
             line_position = line_inv.Position(decent_distance_travelled)
             current_lat = line_position["lat2"]
             current_lon = line_position["lon2"]
+            decent_distances.append(decent_distance_travelled)
             decent_rows.append(
                 {
                     "alt": current_alt,
@@ -253,8 +280,10 @@ class FlightPath:
             )
             current_alt += BADA_PLOT_TIME_STEP * vertrate
             decent_distance_travelled += BADA_PLOT_TIME_STEP * velocity
+            
 
         decent_rows = decent_rows[::-1]
+        decent_distances = decent_distances[::-1]
 
         if climb_distance_travelled + decent_distance_travelled > total_distance:
             raise ValueError(
@@ -279,44 +308,51 @@ class FlightPath:
                         "lon": current_lon,
                         "vertrate": 0,
                         "velocity": cr_vel,
+                        "distance": climb_distance_travelled + cruise_distance_travelled,
                     }
                 )
                 cruise_distance_travelled += BADA_PLOT_TIME_STEP * cr_vel
+
 
         self.bada_df = pd.DataFrame(climb_rows + cruise_rows)
         self.bada_df["time"] = np.arange(0, len(self.bada_df) * BADA_PLOT_TIME_STEP, BADA_PLOT_TIME_STEP)
 
         des_df = pd.DataFrame(decent_rows)
+        decent_distances = np.array(decent_distances)
+        decent_distances = climb_distance_travelled + cruise_distance_travelled + max(decent_distances) - decent_distances
+        des_df["distance"] = decent_distances
         dist_cr_to_des_gap = total_distance - cruise_distance_travelled - decent_distance_travelled - climb_distance_travelled
         time_des_start = dist_cr_to_des_gap / cr_vel + self.bada_df["time"].iloc[-1]
         des_df["time"] = np.arange(time_des_start, time_des_start + len(des_df) * BADA_PLOT_TIME_STEP, BADA_PLOT_TIME_STEP)
 
         self.bada_df = pd.concat([self.bada_df, des_df], ignore_index=True)
 
-    def plot_altitude(self, BADA=False):
-        data_start = self.df["time"].iloc[0]
+    def plot_altitude(self, x_axis="time", BADA=False):
+        assert x_axis in ["time", "distance"], "x_axis must be either 'time' or 'distance'."
+        if x_axis == "time":
+            data_start = self.df["time"].iloc[0]
+            plt.scatter((self.df["time"] - data_start) / 3600, self.df["baroaltitude"], s=5, alpha=0.5, color="red", label="Data")
+            if self.interp_df is not None:
+                plt.scatter((self.interp_df["time"] - data_start) / 3600, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
+            plt.xlabel("Time (hours)")
+        elif x_axis == "distance":
+            plt.scatter(self.df["distance"] / 1000, self.df["baroaltitude"], s=5, alpha=0.5, color="red", label="Data")
+            if self.interp_df is not None:
+                plt.scatter(self.interp_df["distance"] / 1000, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
+            plt.xlabel("Distance (km)")
+
         if BADA:
             if self.bada_df is None:
                 self.calc_bada_path()
-            plt.plot(self.bada_df["time"] / 60**2, self.bada_df["alt"], label="BADA Path", linestyle="--")
+            if x_axis == "time":
+                plt.plot(self.bada_df["time"] / 3600, self.bada_df["alt"], label="BADA Path", linestyle="--")
+            elif x_axis == "distance":
+                plt.plot(self.bada_df["distance"] / 1000, self.bada_df["alt"], label="BADA Path", linestyle="--")
 
-        if (self.df["interpolated"].eq(False)).any():
-            plt.scatter(
-                (self.df.loc[self.df["interpolated"].eq(False), "time"] - data_start) / 3600,
-                self.df.loc[self.df["interpolated"].eq(False), "baroaltitude"],
-                s=5,
-                alpha=0.5,
-                color="blue",
-                label="Non-interpolated",
-            )
-        plt.scatter(
-            (self.df.loc[self.df["interpolated"].eq(True), "time"] - data_start) / 3600,
-            self.df.loc[self.df["interpolated"].eq(True), "baroaltitude"],
-            s=5,
-            alpha=0.5,
-            color="red",
-            label="Interpolated",
-        )
+        # line = geod.Inverse(self.origin_ap_data["lat"], self.origin_ap_data["lon"], self.destination_ap_data["lat"], self.destination_ap_data["lon"])
+        # total_distance = line["s12"] / 1000  # Convert to km
+        # plt.scatter([0, total_distance], [self.origin_ap_data["alt"], self.destination_ap_data["alt"]], color="black", label="Airport Altitude")
+
         # Calculate altitude by integrating vertical rate
         # integrated_altitude = (np.cumsum(flight_path["vertrate"].fillna(0) * flight_path["time"].diff().fillna(0))) + flight_path["baroaltitude"].iloc[0]
         # plt.plot(time_series, integrated_altitude, label=f"Integrated Altitude {flight_path_name}", linestyle='-.', color=colors(i))
@@ -324,7 +360,6 @@ class FlightPath:
         takeoff_time = pd.to_datetime(self.df["time"].iloc[0], unit="s").round("s")
 
         plt.legend()
-        plt.xlabel("Time (hours)")
         plt.ylabel("Altitude (m)")
         plt.title(
             f"{self.origin_name} to {self.destination_name} - {self.typecode} - No: {self.flight_num} - Takeoff: {takeoff_time}"
@@ -378,8 +413,14 @@ class FlightPath:
 
     def interpolate_alt_gaps(self):
         # TODO does not climb to cruise altitude, only to next altitude this may be a problem for flight missing lots of data
+        # TODO this does not ensure that correct distance is covered, only that the correct altitude is reached
         idx_alt_gaps = self.df["baroaltitude"].diff().abs() > ALT_GAP_MAX
         alt_gap_indexes = idx_alt_gaps[idx_alt_gaps].index.tolist()
+
+        if not alt_gap_indexes:
+            print("No altitude gaps found.")
+            return
+
         new_rows = []
 
         for gap_num, gap_idx in enumerate(alt_gap_indexes):
@@ -405,6 +446,10 @@ class FlightPath:
                 1:
             ]  # Final point removed later, keep for now to allow full time to be covered
             interp_time_step = interp_time[1] - interp_time[0]
+
+            distance_travelled = 0
+            current_alt = alt_start
+
             print(
                 f"Altitude gap of {alt_end - alt_start:.0f} m, starting {(time_start - self.df['time'].iloc[0]) / 3600:.2f}h, duration {time_end - time_start:.0f}s."
             )
@@ -428,8 +473,6 @@ class FlightPath:
                     f"Max BADA climb: {max_bada_climb:.0f} m, climb if current rate continued until next datapoint: {max_prev_rate_climb:.0f} m, target: {alt_gap:.0f} m."
                 )
 
-                current_alt = alt_start
-
                 if max_bada_climb > alt_gap:  # BADA climb rate is sufficient, interpolate using BADA
                     print("BADA sufficient to fill time gap.")
                     print(
@@ -439,10 +482,14 @@ class FlightPath:
                         input("WARN. Distance required to climb using BADA is greater than total distance. Please acknowledge.")
                     for time in interp_time:
                         climb_needed = alt_end - current_alt
-                        climb_possible = self.find_ac_perf(current_alt)["ROCDnom_cl"] * interp_time_step * FT_TO_M / 60
+                        ac_perf = self.find_ac_perf(current_alt)
+                        climb_possible = ac_perf["ROCDnom_cl"] * interp_time_step * FT_TO_M / 60
                         climb = min(climb_needed, climb_possible)
                         current_alt += climb
-                        new_rows.append({"time": time, "baroaltitude": current_alt})
+                        ac_vel = ac_perf["Vcl"] * KTS_TO_MPS
+                        distance_travelled += ac_vel * interp_time_step
+                        line_position = line.Position(distance_travelled)
+                        new_rows.append({"time": time, "alt": current_alt, "lat": line_position["lat2"], "lon": line_position["lon2"], "velocity": ac_vel, "distance": distance_travelled+start_row["distance"]})
                         if current_alt >= alt_end and time != interp_time[-1]:  # Break if target altitude reached prematurely
                             break
 
@@ -453,7 +500,8 @@ class FlightPath:
                         climb_possible = last_vert_rate * interp_time_step
                         climb = min(climb_needed, climb_possible)
                         current_alt += climb
-                        new_rows.append({"time": time, "baroaltitude": current_alt})
+                        # TODO add pos and vel
+                        new_rows.append({"time": time, "alt": current_alt})
                         if current_alt >= alt_end and time != interp_time[-1]:  # Break if target altitude reached prematurely
                             break
 
@@ -464,7 +512,8 @@ class FlightPath:
                         for time in interp_time:
                             climb = required_rate * interp_time_step
                             current_alt += climb
-                            new_rows.append({"time": time, "baroaltitude": current_alt})
+                            # TODO add pos and vel
+                            new_rows.append({"time": time, "alt": current_alt})
                             if current_alt >= alt_end and time != interp_time[-1]:  # Break if target altitude reached prematurely
                                 break
                     else:
@@ -474,24 +523,90 @@ class FlightPath:
                 print("Full time series used, removing final point to avoid duplicate.")
                 new_rows.pop()
 
-        # TODO check if final altitude is within tolerance of target
-
-        # Add the new rows to the dataframe
-        new_rows_df = pd.DataFrame(new_rows)
-        new_rows_df["interpolated"] = True
-        self.df = pd.concat([self.df, new_rows_df], ignore_index=True)
-        self.df.sort_values(by="time", inplace=True)
-        self.df.reset_index(drop=True, inplace=True)
-
-        # Validate the dataframes TODO remove this if not needed
-        if not self.df["time"].is_monotonic_increasing:
-            print(f"Warning: Time data in {self.filepath} is not sorted. Please sort the data.")
-
-        if not self.df.index.is_monotonic_increasing:
-            print(f"Warning: Index data in {self.filepath} is not sorted. Please sort the data.")
+        self.interp_df = pd.DataFrame(new_rows)
 
     def interpolate_time_gaps(self):
         pass
+
+    def plot_flight_path(self, color_by="velocity", BADA=True):
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        ax.add_feature(cfeature.LAND)
+        ax.add_feature(cfeature.OCEAN)
+        # ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.BORDERS, linestyle=":")
+        # ax.add_feature(cfeature.LAKES, alpha=0.5)
+        # ax.add_feature(cfeature.RIVERS)
+
+        min_lon = min(self.df["lon"])
+        max_lon = max(self.df["lon"])
+        min_lat = min(self.df["lat"])
+        max_lat = max(self.df["lat"])
+
+        lon_margin = (max_lon - min_lon) * 0.1
+        lat_margin = (max_lat - min_lat) * 0.1
+        min_lon -= lon_margin
+        max_lon += lon_margin
+        min_lat -= lat_margin
+        max_lat += lat_margin
+
+        ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+
+        if BADA:
+            if self.bada_df is None:
+                self.calc_bada_path()
+            plt.plot(self.bada_df["lon"], self.bada_df["lat"], label="BADA Path", linestyle="--")
+
+
+
+        if color_by == "velocity":
+            cbar_label = "Velocity (m/s)"
+            cbar_source = "velocity"
+            max_velocity = max(self.df["velocity"])
+            min_velocity = min(self.df["velocity"])
+            norm = Normalize(vmin=min_velocity, vmax=max_velocity)
+        elif color_by.endswith("altitude"):
+            cbar_source_interp = "alt"
+            if color_by == "geoaltitude":
+                cbar_label = "Geo Altitude (m)"
+                cbar_source = "geoaltitude"
+            elif color_by == "baroaltitude":
+                cbar_label = "Baro Altitude (m)"
+                cbar_source = "baroaltitude"
+            max_altitude = max(self.df[cbar_source])
+            min_altitude = min(self.df[cbar_source])
+            norm = Normalize(vmin=min_altitude, vmax=max_altitude)
+
+
+        points = plt.scatter(
+            self.df["lon"],
+            self.df["lat"],
+            c=self.df[cbar_source],
+            cmap="viridis",
+            norm=norm,
+            s=5,
+            alpha=0.5,
+            marker="o",
+            label="ADS-B Data",
+        )
+
+        if self.interp_df is not None:
+            plt.scatter(
+                self.interp_df["lon"],
+                self.interp_df["lat"],
+                c=self.interp_df[cbar_source_interp],
+                cmap="viridis",
+                norm=norm,
+                s=5,
+                alpha=0.5,
+                label="Interpolated Data",
+                marker="^",
+            )
+
+        cbar = plt.colorbar(points, orientation='horizontal', pad=0.05, aspect=50, label=cbar_label)
+        cbar.ax.set_position([0.215, -0.05, 0.6, 0.3])
+        plt.title(f"{self.origin_name} to {self.destination_name} - {self.typecode} - No: {self.flight_num}")
+        plt.legend()
+        plt.show()
 
 
 def load_flight_paths_obj() -> list[FlightPath]:
@@ -508,7 +623,8 @@ for flight in flight_paths:
     print(flight)
     flight.clean_alt_data()
     flight.interpolate_alt_gaps()
-    flight.plot_altitude(BADA=True)
+    flight.plot_altitude(BADA=True, x_axis="distance")
+    flight.plot_flight_path(color_by="geoaltitude")
     # flight.plot_vert_rate()
     # flight.separate_legs()
     # flight.plot_phases()
