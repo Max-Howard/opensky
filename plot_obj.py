@@ -383,10 +383,11 @@ class FlightPath:
             print(f"{self.df['phase'][idx]} at {(self.df['time'][idx] - self.df['time'][0]) / 3600:.3f} hours")
         print(f"Separation complete. Number of phases: {phase_changes}")
 
-    def interpolate_alt_gaps(self):
+    def interpolate_alt_gaps(self, alt_source="baroaltitude"):
         # TODO does not climb to cruise altitude, only to next altitude this may be a problem for flight missing lots of data
         # TODO this does not ensure that correct distance is covered, only that the correct altitude is reached
-        idx_alt_gaps = self.df["baroaltitude"].diff().abs() > ALT_GAP_MAX
+        assert alt_source in ["baroaltitude", "geoaltitude"], "alt_source must be either 'baroaltitude' or 'geoaltitude'."
+        idx_alt_gaps = self.df[alt_source].diff().abs() > ALT_GAP_MAX
         alt_gap_indexes = idx_alt_gaps[idx_alt_gaps].index.tolist()
         AC_MAX_ALT = self.ac_data["hMO"] * FT_TO_M
 
@@ -410,8 +411,8 @@ class FlightPath:
             if time_gap < TIME_GAP_ALT_GAP:  # Don't interpolate if gap time is too short
                 print("Skipping interpolation due to short time gap.")
                 continue
-            alt_start = start_row["baroaltitude"]
-            alt_end = end_row["baroaltitude"]
+            alt_start = start_row[alt_source]
+            alt_end = end_row[alt_source]
             alt_gap = alt_end - alt_start
             last_vert_rate = start_row["vertrate"]
             num_interp_points = max(int(time_gap / TIME_GAP_ALT_GAP), 5)
