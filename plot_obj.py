@@ -428,11 +428,12 @@ class FlightPath:
                         ac_perf = self.find_ac_perf(current_alt)
                         climb_possible = ac_perf["ROCDnom_cl"] * interp_time_step * FT_TO_M / 60
                         climb = min(climb_needed, climb_possible)
+                        vert_rate = climb / interp_time_step
                         current_alt += climb
                         ac_vel = ac_perf["Vcl"] * KTS_TO_MPS
                         distance_travelled += ac_vel * interp_time_step
                         line_position = line.Position(distance_travelled)
-                        new_rows.append({"time": time, "alt": current_alt, "lat": line_position["lat2"], "lon": line_position["lon2"], "velocity": ac_vel, "distance": distance_travelled+start_row["distance"]})
+                        new_rows.append({"time": time, "alt": current_alt, "lat": line_position["lat2"], "lon": line_position["lon2"], "velocity": ac_vel, "distance": distance_travelled+start_row["distance"], "vertrate": vert_rate})
                         if current_alt >= alt_end and time != interp_time[-1]:  # Break if target altitude reached prematurely
                             break
 
@@ -515,10 +516,32 @@ class FlightPath:
     def plot_vert_rate(self):
         time_series = self.df["time"] - self.df["time"][0]  # / 60**2
         vert_rate_ave = self.df["vertrate"].rolling(window=50, center=True, min_periods=1).median()
-        plt.scatter(time_series, vert_rate_ave, s=5, alpha=0.5)
-        plt.scatter(time_series, self.df["vertrate"], s=5, alpha=0.5)
+        plt.scatter(time_series, vert_rate_ave, s=5, alpha=0.5, label="Averaged Data")
+        plt.scatter(time_series, self.df["vertrate"], s=5, alpha=0.5, label="Raw Data")
         plt.xlabel("Time (hours)")
         plt.ylabel("Vertical Rate (m/s)")
+        plt.legend()
+        plt.show()
+
+    def vert_rate_vs_altitude(self):
+        time_series = (self.df['time'] - self.df["time"][0]) / 60**2
+
+        plt.scatter(self.df['geoaltitude'], self.df["vertrate"], s=8, c=time_series, cmap='plasma', marker='x', label="ADS-B Altitude Rate vs GNSS Altitude", alpha=1)
+        if self.interp_df is not None:
+            plt.scatter(self.interp_df['alt'], self.interp_df["vertrate"], s=8, c="r", marker='x', label="Interpolated Data", alpha=1)
+
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDhi_cl"] * FT_TO_M/ 60, label="BADA High Load Climb Rate", c = "red")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDnom_cl"] * FT_TO_M/ 60, label="BADA Nominal Load Climb Rate", c = "green")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDlo_cl"] * FT_TO_M/ 60, label="BADA Low Climb Load Rate", c = "purple")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDnom_des"] * FT_TO_M/ -60, label="BADA Nominal Load Descent Rate", c = "blue")
+        plt.xlabel("Altitude (m)")
+        plt.ylabel("Altitude Rate (m/s)")
+        plt.title(f"{self.origin_name} to {self.destination_name} Altitude Rate vs Altitude")
+        plt.ylim(-25, 25)
+        plt.text(0.5, 0.95, 'Vertical rate axis limited to [-25, 25] m/s', 
+                        horizontalalignment='center', verticalalignment='center', 
+                        transform=plt.gca().transAxes, fontsize=10, color='red')
+        plt.legend()
         plt.show()
 
     def plot_flight_path(self, color_by="velocity", BADA=True):
@@ -548,8 +571,6 @@ class FlightPath:
             if self.bada_df is None:
                 self.calc_bada_path()
             plt.plot(self.bada_df["lon"], self.bada_df["lat"], label="BADA Path", linestyle="--")
-
-
 
         if color_by == "velocity":
             cbar_label = "Velocity (m/s)"
@@ -611,13 +632,23 @@ def load_flight_paths_obj() -> list[FlightPath]:
     return flight_paths
 
 
-flight_paths = load_flight_paths_obj()
-for flight in flight_paths:
-    print(flight)
-    flight.clean_alt_data()
-    flight.interpolate_alt_gaps()
-    flight.plot_altitude(BADA=True, x_axis="distance")
-    flight.plot_flight_path(color_by="geoaltitude")
-    # flight.plot_vert_rate()
-    # flight.separate_legs()
-    # flight.plot_phases()
+# flight_paths = load_flight_paths_obj()
+# for flight in flight_paths:
+#     print(flight)
+#     flight.clean_alt_data()
+#     flight.interpolate_alt_gaps()
+#     flight.plot_altitude(BADA=True, x_axis="distance")
+#     flight.plot_flight_path(color_by="geoaltitude")
+#     flight.plot_vert_rate()
+#     flight.separate_legs()
+#     flight.plot_phases()
+#     flight.vert_rate_vs_altitude()
+
+for filename in os.listdir("./output"):
+    if filename.endswith(".csv") or filename.endswith(".pkl"):
+        flight = FlightPath(filename)
+        print(flight)
+        flight.clean_alt_data()
+        flight.interpolate_alt_gaps()
+        flight.plot_altitude(BADA=True, x_axis="time")
+        flight.vert_rate_vs_altitude()
