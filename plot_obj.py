@@ -167,13 +167,18 @@ class FlightPath:
         return f"\nFlightPath Object\nFrom: {self.origin_name}, To: {self.destination_name}, Typecode: {self.typecode}\nTakeoff: {self.df['time'].iloc[0]}, Landing: {self.df['time'].iloc[-1]}, Duration: {self.df['time'].iloc[-1] - self.df['time'].iloc[0]} seconds\nicao24: {self.icao24}, flight number: {self.flight_num}, containing {len(self.df)} rows."
 
     def combine_df(self):
-        interplated_df = self.interp_df.copy()
-        real_df = self.df.copy()
-        interplated_df["interpolated"] = True
-        real_df["interpolated"] = False
-        combined_df = pd.concat([interplated_df, real_df], ignore_index=True)
-        combined_df.sort_values(by="time", inplace=True)
-        combined_df.reset_index(drop=True, inplace=True)
+        if self.interp_df is None:
+            print("No interpolated data found, returning real data.")
+            combined_df = self.df.copy()
+            combined_df["interpolated"] = False
+        else:
+            interplated_df = self.interp_df.copy()
+            real_df = self.df.copy()
+            interplated_df["interpolated"] = True
+            real_df["interpolated"] = False
+            combined_df = pd.concat([interplated_df, real_df], ignore_index=True)
+            combined_df.sort_values(by="time", inplace=True)
+            combined_df.reset_index(drop=True, inplace=True)
         return combined_df
 
     def _find_distance_travelled(self):
@@ -459,7 +464,7 @@ class FlightPath:
                         ac_vel = ac_perf["Vcl"] * KTS_TO_MPS
                         distance_travelled += ac_vel * interp_time_step
                         line_position = line.Position(distance_travelled)
-                        new_rows.append({"time": time, "alt": current_alt, "lat": line_position["lat2"], "lon": line_position["lon2"], "velocity": ac_vel, "distance": distance_travelled+start_row["distance"], "vertrate": vert_rate})
+                        new_rows.append({"time": time, "alt": current_alt, "lat": line_position["lat2"], "lon": line_position["lon2"], "velocity": ac_vel, "distance": distance_travelled+start_row["distance"], "vertrate": vert_rate, "phase": "climb"})
                         if current_alt >= alt_end and time != interp_time[-1]:  # Break if target altitude reached prematurely
                             break
 
@@ -499,13 +504,20 @@ class FlightPath:
         pass
 
     def plot_phases(self):
-        phases = self.df["phase"].unique()
-        for phase in phases:
+
+        if self.interp_df is not None:
+            for phase in self.interp_df["phase"].unique():
+                interp_phase_df = self.interp_df[self.interp_df["phase"] == phase]
+                plt.scatter((interp_phase_df["time"] - self.df["time"][0]) / 60**2, interp_phase_df["alt"], label=f"Interpolated {phase}")
+
+        for phase in self.df["phase"].unique():
             phase_df = self.df[self.df["phase"] == phase]
-            plt.scatter((phase_df["time"] - self.df["time"][0]) / 60**2, phase_df["geoaltitude"], label=phase)
+            plt.scatter((phase_df["time"] - self.df["time"][0]) / 60**2, phase_df["baroaltitude"], label=phase)
+
         plt.legend()
         plt.xlabel("Time (hours)")
         plt.ylabel("Altitude (m)")
+        plt.title(f"{self.origin_name} to {self.destination_name} - {self.typecode} - No: {self.flight_num}")
         plt.show()
 
     def plot_altitude(self, x_axis="time", BADA=False):
