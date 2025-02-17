@@ -164,7 +164,13 @@ class FlightPath:
         print(f"Flight imported from {filename}.")
 
     def __repr__(self):
-        return f"\nFlightPath Object\nFrom: {self.origin_name}, To: {self.destination_name}, Typecode: {self.typecode}\nTakeoff: {self.df['time'].iloc[0]}, Landing: {self.df['time'].iloc[-1]}, Duration: {self.df['time'].iloc[-1] - self.df['time'].iloc[0]} seconds\nicao24: {self.icao24}, flight number: {self.flight_num}, containing {len(self.df)} rows."
+        takeoff_time = pd.to_datetime(self.df['time'].iloc[0], unit='s')
+        landing_time = pd.to_datetime(self.df['time'].iloc[-1], unit='s')
+        duration = (landing_time - takeoff_time).total_seconds()
+        duration_hours = int(duration // 3600)
+        duration_minutes = int((duration % 3600) // 60)
+
+        return f"\nFlightPath Object\nFrom: {self.origin_name}, To: {self.destination_name}, Typecode: {self.typecode}\nTakeoff: {takeoff_time.strftime('%d-%m-%Y %H:%M')}, Landing: {landing_time.strftime('%d-%m-%Y %H:%M')}, Duration: {duration_hours}:{duration_minutes}\nicao24: {self.icao24}, flight number: {self.flight_num}, containing {len(self.df)} rows."
 
     def combine_df(self):
         if self.interp_df is None:
