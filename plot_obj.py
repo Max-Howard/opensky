@@ -377,6 +377,7 @@ class FlightPath:
         # TODO this does not ensure that correct distance is covered, only that the correct altitude is reached
         idx_alt_gaps = self.df["baroaltitude"].diff().abs() > ALT_GAP_MAX
         alt_gap_indexes = idx_alt_gaps[idx_alt_gaps].index.tolist()
+        AC_MAX_ALT = self.ac_data["hMO"] * FT_TO_M
 
         if not alt_gap_indexes:
             print("No altitude gaps found.")
@@ -417,14 +418,21 @@ class FlightPath:
 
             if alt_start < alt_end:  # Need to climb to next altitude
                 # First check if the climb rate is sufficient to reach the next altitude using BADA
-                max_bada_alt = alt_start
-                bada_distance_required_climb = 0
-                for time in interp_time:
-                    ac_perf = self.find_ac_perf(max_bada_alt)
-                    max_bada_alt += ac_perf["ROCDnom_cl"] * interp_time_step * FT_TO_M / 60
-                    if max_bada_alt <= alt_end:
-                        vel_at_fl = ac_perf["Vcl"]  # NOTE using TAS not GS, change if possible
-                        bada_distance_required_climb += vel_at_fl * interp_time_step * KTS_TO_MPS
+                if alt_end > AC_MAX_ALT:
+                    input("WARN. Altitude exceeds maximum altitude of BADA table. Please acknowledge.")
+                    max_bada_alt = AC_MAX_ALT
+                else:
+                    max_bada_alt = alt_start
+                    bada_distance_required_climb = 0
+                    for time in interp_time:
+                        ac_perf = self.find_ac_perf(max_bada_alt)
+                        max_bada_alt += ac_perf["ROCDnom_cl"] * interp_time_step * FT_TO_M / 60
+                        if max_bada_alt <= alt_end: # Still need to climb, thus we need to cover the distance
+                            vel_at_fl = ac_perf["Vcl"]  # NOTE using TAS not GS, change if possible
+                            bada_distance_required_climb += vel_at_fl * interp_time_step * KTS_TO_MPS
+                        if max_bada_alt > AC_MAX_ALT: # If altitude exceeds BADA, max altitude reached
+                            max_bada_alt = AC_MAX_ALT
+                            break
 
                 max_bada_climb = max_bada_alt - alt_start
 
