@@ -18,6 +18,7 @@
         "fcounts",
         "fnom",
         "geod",
+        "GNSS",
         "icao",
         "idxs",
         "irow",
@@ -36,7 +37,6 @@
         ".vscode",
         ".git",
         "BADA",
-        "airports.csv",
-        "cruise_fl.csv"
+        "**/*.csv"
     ]
 }
