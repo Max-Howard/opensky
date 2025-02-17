@@ -185,13 +185,31 @@ class FlightPath:
             distances.append(distances[-1] + distance)
         self.df["distance"] = distances
 
-    def find_ac_perf(self, altitude) -> pd.Series:
+    def find_ac_perf(self, altitude, interp=True) -> pd.Series:
         """
         Find the aircraft performance at current altitude.
         """
         current_FL = (altitude / FT_TO_M) / 100
-        closest_FL = self.ac_data["table"].index[np.abs(self.ac_data["table"].index - current_FL).argmin()]
-        return self.ac_data["table"].loc[closest_FL]
+        if interp:
+            if not (self.ac_data["table"].index <= current_FL).any():
+                input(f"Trying to find BADA performance at altitude {altitude} m, which is outside the range of the BADA table. Please acknowledge.")
+                return self.ac_data["table"].iloc[0]
+            elif not (self.ac_data["table"].index >= current_FL).any():
+                input(f"Trying to find BADA performance at altitude {altitude} m, which is outside the range of the BADA table. Please acknowledge.")
+                return self.ac_data["table"].iloc[-1]
+            lower_FL = self.ac_data["table"].index[self.ac_data["table"].index <= current_FL].max()
+            upper_FL = self.ac_data["table"].index[self.ac_data["table"].index >= current_FL].min()
+            lower_row = self.ac_data["table"].loc[lower_FL]
+            upper_row = self.ac_data["table"].loc[upper_FL]
+
+            if lower_FL == upper_FL:    # Handle the case where the current altitude is exactly at a FL
+                return lower_row
+            else:
+                interp_row = lower_row + (upper_row - lower_row) * ((current_FL - lower_FL) / (upper_FL - lower_FL))
+                return interp_row
+        else:
+            closest_FL = self.ac_data["table"].index[np.abs(self.ac_data["table"].index - current_FL).argmin()]
+            return self.ac_data["table"].loc[closest_FL]
 
     def clean_alt_data(self):
         # TODO better way to clean altitude data
