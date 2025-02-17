@@ -431,7 +431,7 @@ class FlightPath:
             if alt_start < alt_end:  # Need to climb to next altitude
                 # First check if the climb rate is sufficient to reach the next altitude using BADA
                 if alt_end > AC_MAX_ALT:
-                    input("WARN. Altitude exceeds maximum altitude of BADA table. Please acknowledge.")
+                    input("WARN! Altitude exceeds maximum altitude of BADA table. Please acknowledge.")
                     max_bada_alt = AC_MAX_ALT
                 else:
                     max_bada_alt = alt_start
@@ -457,10 +457,10 @@ class FlightPath:
                 if max_bada_climb > alt_gap:  # BADA climb rate is sufficient, interpolate using BADA
                     print("BADA sufficient to fill time gap.")
                     print(
-                        f"BADA needs {bada_distance_required_climb / 1000:.0f} km to climb, actual distance covered: {gap_total_distance / 1000:.0f} km."
+                        f"BADA needs {bada_distance_required_climb / 1000:.0f} km to climb, availible distance: {gap_total_distance / 1000:.0f} km."
                     )
                     if bada_distance_required_climb > gap_total_distance:  # TODO could add some sort of climb pattern
-                        input("WARN. Distance required to climb using BADA is greater than total distance. Please acknowledge.")
+                        input("WARN! Distance required to climb using BADA is greater than availible distance. Please acknowledge.")
                     for time in interp_time:
                         climb_needed = alt_end - current_alt
                         ac_perf = self.find_ac_perf(current_alt)
@@ -582,7 +582,7 @@ class FlightPath:
 
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDhi_cl"] * FT_TO_M/ 60, label="BADA High Load Climb Rate", c = "red")
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDnom_cl"] * FT_TO_M/ 60, label="BADA Nominal Load Climb Rate", c = "green")
-        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDlo_cl"] * FT_TO_M/ 60, label="BADA Low Climb Load Rate", c = "purple")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDlo_cl"] * FT_TO_M/ 60, label="BADA Low Load Climb Rate", c = "purple")
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDnom_des"] * FT_TO_M/ -60, label="BADA Nominal Load Descent Rate", c = "blue")
         plt.xlabel("Altitude (m)")
         plt.ylabel("Altitude Rate (m/s)")
@@ -699,6 +699,10 @@ for filename in os.listdir("./output"):
         flight = FlightPath(filename)
         print(flight)
         flight.clean_alt_data()
-        flight.interpolate_alt_gaps()
-        flight.plot_altitude(BADA=True, x_axis="time")
+        flight.separate_legs()
+        flight.interpolate_alt_gaps(alt_source="baroaltitude")
+        flight.plot_altitude(BADA=True, x_axis="distance")
+        flight.plot_flight_path(color_by="geoaltitude")
+        flight.plot_vert_rate()
+        flight.plot_phases()
         flight.vert_rate_vs_altitude()
