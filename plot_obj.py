@@ -9,6 +9,8 @@ import cartopy.feature as cfeature
 
 geod = Geodesic.WGS84
 
+FLIGHTS_DIR = "./output"
+
 FT_TO_M = 0.3048
 KTS_TO_MPS = 0.514444
 TIME_GAP_CRUISE = 60
@@ -135,7 +137,7 @@ def read_ptf(filepath):
 
 
 class FlightPath:
-    def __init__(self, filename, flights_dir="./output"):
+    def __init__(self, filename, flights_dir=FLIGHTS_DIR):
         filepath = os.path.join(flights_dir, filename)
         if filepath.endswith(".csv"):
             self.df = pd.read_csv(filepath)
@@ -245,8 +247,8 @@ class FlightPath:
         # alt_stop = self.df["geoaltitude"].iloc[-1]
         # alt_cruise = max(self.df["geoaltitude"])
 
-        alt_start = self.origin_ap_data["alt"]
-        alt_stop = self.destination_ap_data["alt"]
+        alt_start = self.origin_ap_data["alt"] * FT_TO_M
+        alt_stop = self.destination_ap_data["alt"] * FT_TO_M
         alt_cruise = AC_CRUISE_LEVELS.loc[self.typecode, "cr_fl"] * 100 * FT_TO_M
 
         lat_takeoff = self.origin_ap_data["lat"]
@@ -500,12 +502,16 @@ class FlightPath:
                                 break
                     else:
                         raise ValueError("Interpolation failed.")
+                    
+            elif alt_start > alt_end:  # Need to decent to next altitude
+                print("Decent not implemented yet.")
+                continue  # TODO implement decent interpolation
 
             if time == interp_time[-1]:  # If the final point was reached, remove it to avoid duplicate with real data
                 print("Full time series used, removing final point to avoid duplicate.")
                 new_rows.pop()
-
-        self.interp_df = pd.DataFrame(new_rows)
+        if new_rows:
+            self.interp_df = pd.DataFrame(new_rows)
 
     def interpolate_time_gaps(self):
         pass
@@ -605,15 +611,18 @@ class FlightPath:
 
         min_lon = min(self.df["lon"])
         max_lon = max(self.df["lon"])
+        mid_lon = (max_lon + min_lon) / 2
         min_lat = min(self.df["lat"])
         max_lat = max(self.df["lat"])
+        mid_lat = (max_lat + min_lat) / 2
 
-        lon_margin = (max_lon - min_lon) * 0.1
-        lat_margin = (max_lat - min_lat) * 0.1
-        min_lon -= lon_margin
-        max_lon += lon_margin
-        min_lat -= lat_margin
-        max_lat += lat_margin
+        size_lon = max((max_lon - min_lon)*1.2, (max_lat - min_lat)*0.5)
+        size_lat = max((max_lon - min_lon)*0.5, (max_lat - min_lat)*1.2)
+
+        min_lon = mid_lon - size_lon/2
+        max_lon = mid_lon + size_lon/2
+        min_lat = mid_lat - size_lat/2
+        max_lat = mid_lat + size_lat/2
 
         ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
 
