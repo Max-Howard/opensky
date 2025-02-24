@@ -547,12 +547,14 @@ class FlightPath:
             data_start = self.df["time"].iloc[0]
             plt.scatter((self.df["time"] - data_start) / 3600, self.df["geoaltitude"], s=5, alpha=0.5, color="red", label="GNSS Data")
             plt.scatter((self.df["time"] - data_start) / 3600, self.df["baroaltitude"], s=5, alpha=0.5, color="green", label="Barometric Data")
+            plt.plot((self.df["time"] - data_start) / 3600, self.df["vertrate"].cumsum(), color="black", label="Integrated Vertical Rate")
             if self.interp_df is not None:
                 plt.scatter((self.interp_df["time"] - data_start) / 3600, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
             plt.xlabel("Time (hours)")
         elif x_axis == "distance":
             plt.scatter(self.df["distance"] / 1000, self.df["geoaltitude"], s=5, alpha=0.5, color="red", label="GNSS Data")
             plt.scatter(self.df["distance"] / 1000, self.df["baroaltitude"], s=5, alpha=0.5, color="green", label="Barometric Data")
+            plt.plot(self.df["distance"] / 1000, self.df["vertrate"].cumsum() + self.origin_ap_data["alt"] * FT_TO_M, color="black", label="Integrated Vertical Rate")
             if self.interp_df is not None:
                 plt.scatter(self.interp_df["distance"] / 1000, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
             plt.xlabel("Distance (km)")
@@ -578,21 +580,25 @@ class FlightPath:
 
     def plot_vert_rate(self):
         time_series = (self.df["time"] - self.df["time"][0]) / 60**2
-        vert_rate_ave = self.df["vertrate"].rolling(window=50, center=True, min_periods=1).median()
-        plt.plot(time_series, vert_rate_ave
-                 , alpha=0.5, label="Averaged Data")
-        plt.scatter(time_series, self.df["vertrate"], s=5, alpha=0.5, label="Raw Data")
+        # vert_rate_ave = self.df["vertrate"].rolling(window=50, center=True, min_periods=1).median()
+        # plt.plot(time_series, vert_rate_ave
+        #          , alpha=0.5, label="Averaged Data")
+        plt.scatter(time_series, self.df["geoaltitude"].diff(), s=5, alpha=0.5, label="GNSS Dif")
+        plt.scatter(time_series, self.df["baroaltitude"].diff(), s=5, alpha=0.5, label="Baro Dif")
+        plt.scatter(time_series, self.df["vertrate"], s=5, alpha=0.5, label="Vertrate")
         plt.xlabel("Time (hours)")
         plt.ylabel("Vertical Rate (m/s)")
+        plt.ylim(-25, 25)
+        plt.text(0.5, 0.95, 'Vertical rate axis limited to [-25, 25] m/s', 
+             horizontalalignment='center', verticalalignment='center', 
+             transform=plt.gca().transAxes, fontsize=10, color='red')
         plt.legend()
         plt.show()
 
     def vert_rate_vs_altitude(self):
-        time_series = (self.df['time'] - self.df["time"][0]) / 60**2
-
-        plt.scatter(self.df['geoaltitude'], self.df["vertrate"], s=8, c=time_series, cmap='plasma', marker='x', label="ADS-B Altitude Rate vs GNSS Altitude", alpha=1)
+        plt.scatter(self.df['baroaltitude'], self.df["vertrate"], s=8, c="orange", marker='x', label="ADS-B Altitude Rate vs Baro Altitude", alpha=1)
         if self.interp_df is not None:
-            plt.scatter(self.interp_df['alt'], self.interp_df["vertrate"], s=8, c="r", marker='x', label="Interpolated Data", alpha=1)
+            plt.scatter(self.interp_df['alt'], self.interp_df["vertrate"], s=8, c="black", marker='x', label="Interpolated Data", alpha=1)
 
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDhi_cl"] * FT_TO_M/ 60, label="BADA High Load Climb Rate", c = "red")
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["ROCDnom_cl"] * FT_TO_M/ 60, label="BADA Nominal Load Climb Rate", c = "green")
@@ -605,6 +611,21 @@ class FlightPath:
         plt.text(0.5, 0.95, 'Vertical rate axis limited to [-25, 25] m/s', 
                         horizontalalignment='center', verticalalignment='center', 
                         transform=plt.gca().transAxes, fontsize=10, color='red')
+        plt.legend()
+        plt.show()
+
+    def plot_velocity_vs_altitude(self):
+
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vcl"], label="BADA Climb Velocity", c = "red")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vcr"], label="BADA Cruise Velocity", c = "green")
+        plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vdes"], label="BADA Descent Velocity", c = "blue")
+        for phase in self.df["phase"].unique():
+            phase_df = self.df[self.df["phase"] == phase]
+            plt.scatter(phase_df['baroaltitude'], phase_df["velocity"]/KTS_TO_MPS, s=8, label=phase, alpha=1)
+
+        plt.xlabel("Altitude (m)")
+        plt.ylabel("Velocity (knots)")
+        plt.title(f"{self.typecode} - {self.origin_name} to {self.destination_name} Velocity vs Altitude")
         plt.legend()
         plt.show()
 
