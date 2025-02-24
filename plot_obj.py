@@ -363,26 +363,34 @@ class FlightPath:
         """
         Separate the flight path into takeoff, climb, cruise, decent, and landing phases.
         """
-        # Introduce a phase column, default to cruise
-        self.df["phase"] = "cruise"
+
+        MAX_CRUISE_VERT_RATE = 1 # m/s
 
         # Separate into takeoff, cruise, and landing by altitude
-        non_lto_idxs = self.df[self.df["geoaltitude"] > LTO_CEILING]
-        non_LTO_start = non_lto_idxs.index[0]
-        non_LTO_end = non_lto_idxs.index[-1]
-        self.df.loc[:non_LTO_start, "phase"] = "takeoff"
-        self.df.loc[non_LTO_end:, "phase"] = "landing"
+        max_alt = max(self.df["baroaltitude"])
+        if max_alt > LTO_CEILING + self.origin_ap_data["alt"]*FT_TO_M:
+            non_LTO_start = self.df[self.df["baroaltitude"] > LTO_CEILING + self.origin_ap_data["alt"]*FT_TO_M].index[0]
+            self.df.loc[:non_LTO_start-1, "phase"] = "takeoff"
+        else:
+            non_LTO_start = 0
+
+        if max_alt > LTO_CEILING + self.destination_ap_data["alt"]*FT_TO_M:
+            non_LTO_end = self.df[self.df["baroaltitude"] > LTO_CEILING + self.destination_ap_data["alt"]*FT_TO_M].index[-1]
+            self.df.loc[non_LTO_end+1:, "phase"] = "landing"
+        else:
+            non_LTO_end = len(self.df) - 1
 
         # Seprate cruise into climb, cruise, and decent by vertical rate
         vert_rate_ave = self.df["vertrate"].rolling(window=50, center=True, min_periods=1).median()
-        self.df.loc[(vert_rate_ave > 0.5) & (self.df["phase"] == "cruise"), "phase"] = "climb"
-        self.df.loc[(vert_rate_ave < -0.5) & (self.df["phase"] == "cruise"), "phase"] = "decent"
+        self.df.loc[(vert_rate_ave > MAX_CRUISE_VERT_RATE) & (self.df.index >= non_LTO_start) & (self.df.index <= non_LTO_end), "phase"] = "climb"
+        self.df.loc[(vert_rate_ave < -MAX_CRUISE_VERT_RATE) & (self.df.index >= non_LTO_start) & (self.df.index <= non_LTO_end), "phase"] = "decent"
+        self.df.loc[(vert_rate_ave >= -MAX_CRUISE_VERT_RATE) & (vert_rate_ave <= MAX_CRUISE_VERT_RATE) & (self.df.index >= non_LTO_start) & (self.df.index <= non_LTO_end), "phase"] = "cruise"
 
         phase_changes = {phase: 0 for phase in self.df["phase"].unique()}
         change_indexes = self.df.index[self.df["phase"] != self.df["phase"].shift()].tolist()
         for idx in change_indexes:
             phase_changes[self.df["phase"][idx]] += 1
-            print(f"{self.df['phase'][idx]} at {(self.df['time'][idx] - self.df['time'][0]) / 3600:.3f} hours")
+            # print(f"{self.df['phase'][idx]} at {(self.df['time'][idx] - self.df['time'][0]) / 3600:.3f} hours")
         print(f"Separation complete. Number of phases: {phase_changes}")
 
     def interpolate_alt_gaps(self, alt_source="baroaltitude"):
