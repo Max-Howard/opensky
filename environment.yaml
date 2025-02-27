@@ -13,3 +13,7 @@ dependencies:
   - matplotlib
   - contextily
   - shapely
+  - earthaccess
+  - netCDF4
+  - h5netcdf
+  - bottleneck
