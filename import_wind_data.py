@@ -37,13 +37,13 @@ def process_files(files_in, file_out, nlayers=32):
     )
     dslist = []
     for fpath in files_in:
-        print(fpath)
+        # print(fpath)
         ds = xr.open_dataset(fpath, drop_variables=['DTRAIN', 'OMEGA', 'RH'])
         with xr.set_options(keep_attrs=True):
             ds = ds.sel(lev=slice(None, nlayers))
         dslist.append(ds)
         ds.close()
-    
+
     print('Concatenating...', end='')
     ds = xr.concat(dslist, 'time')
     print(' done')
@@ -53,7 +53,6 @@ def process_files(files_in, file_out, nlayers=32):
     end_date = max([d.attrs['End_Date'] for d in dslist])
     with xr.set_options(keep_attrs=True):
         ds = ds.sel(lev=slice(None, nlayers))
-        ds = ds.mean('time')
         ds = ds.assign(WS=np.sqrt(ds.U**2 + ds.V**2))
         ds.WS.attrs = {'long_name': 'wind_speed',
                        'standard_name': 'wind_speed',
@@ -62,19 +61,19 @@ def process_files(files_in, file_out, nlayers=32):
         ds.WDIR.attrs = {'long_name': 'wind_direction',
                          'standard_name': 'wind_direction',
                          'units': 'degrees clockwise from north',}
-        ds = ds.drop(['U', 'V'])
-    
+        ds = ds.drop_vars(['U', 'V'])
+
     # Add altitude coordinate
     ds.coords['h_edge'] = ('lev', H_EDGES,
                            {'long_name': ('altitude over sea level'
                                           + ' at lower edge of grid box'),
                             'units': 'm'})
-        
+
     now = datetime.now(timezone.utc).strftime('%Y/%m/%d %H:%M:%S %Z')
     ds.attrs = {
-        'Title': 'MERRA2 time-averaged wind, processed from GEOS-Chem input'
+        'Title': 'MERRA2 concatenated wind data, processed from GEOS-Chem input'
                  + ' files for use in openAVEM',
-         'Contact': 'Flávio Quadros (f.quadros@tudelft.nl)',
+         'Contact': 'Maximilian Howard (mdeh2@cam.ac.uk)',
          'References': '',
          'Filename': os.path.basename(file_out),
          'History': 'File generated on: ' + now,
@@ -93,121 +92,29 @@ def process_files(files_in, file_out, nlayers=32):
          'Delta_Lat': old_attrs['Delta_Lat']
     }
     print(' done')
-    
+
     print(f'Saving "{file_out}"...', end='')
     encoding = dict(zlib=True, shuffle=True, complevel=1,
-                    chunksizes=[1, ds.lat.size, ds.lon.size])
+                    chunksizes=[ds.time.size, 1, ds.lat.size, ds.lon.size])
     enc = {v:encoding for v in list(ds.data_vars.keys())}
     ds.to_netcdf(file_out, format='NETCDF4', engine='netcdf4',
                  encoding=enc)
     ds.close()
     print(' done')
     print(ds)
-    
+
     return ds
 
-
-def merge_months(year='2019', file_out='./met/wind_yearly_2019.nc4'):
-    """
-    Calculate yearly wind average from monthly averages
-
-    Parameters
-    ----------
-    year : str, optional
-        Year to average. The default is '2019'.
-    file_out : str, optional
-        Path to output file. The default is './met/wind_yearly_2019.nc4'.
-
-    Returns
-    -------
-    ds : xr.Dataset
-        Dataset containing wind speed [m/s] and wind direction [degrees
-        clockwise from north].
-
-    """
-    search = f'./met/wind_monthly_{year}??.nc4'
-    fpaths = glob.glob(search)
-    totaldays = 0
-    dslist = []
-    for fpath in fpaths:
-        ds = xr.open_dataset(fpath)
-        ndays = int(ds.attrs['End_Date']) - int(ds.attrs['Start_Date']) + 1
-        totaldays += ndays
-        
-        with xr.set_options(keep_attrs=True):
-            ds = ds.assign(U = ds['WS'] * np.sin(ds['WDIR'] * np.pi / 180) * ndays)
-            ds = ds.assign(V = ds['WS'] * np.cos(ds['WDIR'] * np.pi / 180) * ndays)
-            ds.drop(['WS', 'WDIR'])
-        
-        dslist.append(ds)
-    
-    ds = dslist[0].copy()
-    print(0)
-    for i in range(1, len(dslist)):
-        ds += dslist[i]
-        print(i)
-    ds /= totaldays
-    print('Processing...', end='')
-    old_attrs = dslist[0].attrs
-    print(dslist[0].attrs)
-    start_date = min([d.attrs['Start_Date'] for d in dslist])
-    end_date = max([d.attrs['End_Date'] for d in dslist])
-    with xr.set_options(keep_attrs=True):
-        ds = ds.assign(WS=np.sqrt(ds.U**2 + ds.V**2))
-        ds.WS.attrs = {'long_name': 'wind_speed',
-                       'standard_name': 'wind_speed',
-                       'units': 'm s-1',}
-        ds = ds.assign(WDIR=np.arctan2(ds.U, ds.V)*180/np.pi)
-        ds.WDIR.attrs = {'long_name': 'wind_direction',
-                         'standard_name': 'wind_direction',
-                         'units': 'degrees clockwise from north',}
-        ds = ds.drop(['U', 'V'])
-    
-    now = datetime.now(timezone.utc).strftime('%Y/%m/%d %H:%M:%S %Z')
-    ds.attrs = {
-        'Title': 'MERRA2 time-averaged wind, processed from GEOS-Chem input'
-                 + ' files for use in openAVEM',
-         'Contact': 'Flávio Quadros (f.quadros@tudelft.nl)',
-         'References': '',
-         'Filename': os.path.basename(file_out),
-         'History': 'File generated on: ' + now,
-         'ProductionDateTime': 'File generated on: ' + now,
-         'ModificationDateTime': 'File generated on: ' + now,
-         'Format': 'NetCDF-4',
-         'SpatialCoverage': 'global',
-         'Version': 'MERRA2',
-         'VersionID': old_attrs['VersionID'],
-         'Nlayers': len(ds.lev),
-         'Start_Date': start_date,
-         'Start_Time': '00:00:00.0',
-         'End_Date': end_date,
-         'End_Time': '23:59:59.99999',
-         'Delta_Lon': old_attrs['Delta_Lon'],
-         'Delta_Lat': old_attrs['Delta_Lat']
-    }
-    print(' done')
-    
-    print(f'Saving "{file_out}"...', end='')
-    encoding = dict(zlib=True, shuffle=True, complevel=1,
-                    chunksizes=[1, ds.lat.size, ds.lon.size])
-    enc = {v:encoding for v in list(ds.data_vars.keys())}
-    ds.to_netcdf(file_out, format='NETCDF4', engine='netcdf4',
-                 encoding=enc)
-    ds.close()
-    print(' done')
-    print(ds)
-    
-    return ds
 
 if __name__ == '__main__':
-    # basedir = r'../GEOS_0.5x0.625/MERRA-2/'
-    basedir = r'../GEOS_2x2.5/MERRA-2/'
-    year = '2019'
+    basedir = r'TempData/'
+    year = '2024'
     for month in [f'{m:02}' for m in range(1, 12 + 1)]:
         output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
         search = f'{basedir}{year}/{month}/' + r'*.A3dyn.*.nc4'
         fpaths = glob.glob(search)
         if len(fpaths) > 0:
+            print(f'Processing {len(fpaths)} files for "{year}/{month}".')
             ds = process_files(fpaths, output_fpath)
         else:
             print(f'Warning: no files found for "{search}"')
