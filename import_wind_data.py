@@ -125,10 +125,12 @@ def download_files(year, month):
     if os.path.exists(save_dir):
         user_input = input(f"The directory {save_dir} already exists, rename/remove it? (yes/no/new_name): ")
         if user_input.lower() == 'yes':
+            print(f"Removing {save_dir}... ", end='')
             shutil.rmtree(save_dir)
             os.makedirs(save_dir)
+            print("done")
         elif user_input.lower() == 'no':
-            print("Cannot continue without removing the existing directory, skipping download.")
+            print("Cannot continue without removing the existing directory, skipping this month.")
             return
         else:
             renamed = os.path.join(BASEDIR, user_input)
@@ -154,37 +156,38 @@ def download_files(year, month):
 
     # Find the links to the files
     all_links = soup.find_all('a')
-    file_urls = []
+    file_names = []
     for link in all_links:
-        href = link.get('href')
-        if href and "A3dyn" in href and href.endswith(".nc4"):
-            file_url = urllib.parse.urljoin(base_url, href)
-            file_urls.append(file_url)
+        file_name:str = link.get('href')
+        if file_name and "A3dyn" in file_name and file_name.endswith(".nc4"):
+            file_names.append(file_name)
 
-    print(f"{datetime.now().strftime('%H:%M:%S')}: Downloading {len(file_urls)} MERRA-2 wind data files for {year}/{month}")
+    print(f"{datetime.now().strftime('%H:%M:%S')}: Downloading {len(file_names)} MERRA-2 wind data files for {year}/{month}")
 
     # Download the files
-    for idx,file_url in enumerate(file_urls):
-        file_response = requests.get(file_url, stream=True)
-        file_num_string: str = f"{idx+1} of {len(file_urls)}"
+    for idx, file_name in enumerate(file_names):
+        file_response = requests.get(url=urllib.parse.urljoin(base_url, file_name), stream=True)
+        file_num_string: str = f"{idx+1} of {len(file_names)}"
         if file_response.status_code == 200:
             start_time = datetime.now()
-            file_path = os.path.join(save_dir, href)
+            file_path = os.path.join(save_dir, file_name)
+            temp_file_path = file_path + ".part"
             total_size = int(file_response.headers.get('content-length', 0))
             block_size = 8192  # 8 Kibibytes
             wrote = 0
-            with open(file_path, 'wb') as f:
+            with open(temp_file_path, 'wb') as f:
                 for chunk in file_response.iter_content(chunk_size=block_size):
                     if chunk:  # filter out keep-alive chunks
                         f.write(chunk)
                         wrote += len(chunk)
                         done = int(50 * wrote / total_size)
                         print(f"\rDownloading file {file_num_string}. File size: {total_size / (1024 * 1024):.2f} MB [{'=' * done}{' ' * (50-done)}] {wrote / total_size:.2%}", end='')
-            seconds_taken = int(round((datetime.now()-start_time).total_seconds(),0))
+            os.rename(temp_file_path, file_path)
+            seconds_taken = int(round((datetime.now()-start_time).total_seconds(), 0))
             print("\r\033[K", end='')
             print(f"File {file_num_string}. Downloaded {total_size / (1024 * 1024):.2f} MB in {seconds_taken}s. Saved to: {file_path}")
         else:
-            raise Exception(f"Failed to download {href}. Status code: {file_response.status_code}")
+            raise Exception(f"Failed to download {file_name}. Status code: {file_response.status_code}")
     return save_dir
 
 
