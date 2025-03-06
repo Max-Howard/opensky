@@ -122,20 +122,26 @@ def download_files(year, month):
     save_dir = os.path.join(BASEDIR, year, month)
 
     # Check download directory before starting
+    existing_files = []
     if os.path.exists(save_dir):
-        user_input = input(f"The directory {save_dir} already exists, rename/remove it? (yes/no/new_name): ")
+        user_input = input(f"The directory {save_dir} already exists, overwrite all existing files? (yes/no/[SKIP]): ")
         if user_input.lower() == 'yes':
             print(f"Removing {save_dir}... ", end='')
             shutil.rmtree(save_dir)
             os.makedirs(save_dir)
             print("done")
         elif user_input.lower() == 'no':
-            print("Cannot continue without removing the existing directory, skipping this month.")
-            return
+            part_files = glob.glob(os.path.join(save_dir, '*.part'))
+            for part_file in part_files:
+                os.remove(part_file)
+                print(f"Removed incomplete file: {part_file}")
+            existing_files = [os.path.basename(f) for f in glob.glob(os.path.join(save_dir, '*.nc4'))]
         else:
-            renamed = os.path.join(BASEDIR, user_input)
-            os.rename(save_dir, renamed)
-            print(f"Renamed {save_dir} to {renamed}")
+            if user_input.lower() != 'skip':
+                print("Skipping this month.")
+            else:
+                print("Invalid input. Skipping this month.")
+            return
     else:
         os.makedirs(save_dir)
 
@@ -160,7 +166,10 @@ def download_files(year, month):
     for link in all_links:
         file_name:str = link.get('href')
         if file_name and "A3dyn" in file_name and file_name.endswith(".nc4"):
-            file_names.append(file_name)
+            if file_name in existing_files:
+                print(f"Skipping {file_name} as it already exists.")
+            else:
+                file_names.append(file_name)
 
     print(f"{datetime.now().strftime('%H:%M:%S')}: Downloading {len(file_names)} MERRA-2 wind data files for {year}/{month}")
 
@@ -181,10 +190,10 @@ def download_files(year, month):
                         f.write(chunk)
                         wrote += len(chunk)
                         done = int(50 * wrote / total_size)
-                        print(f"\rDownloading file {file_num_string}. File size: {total_size / (1024 * 1024):.2f} MB [{'=' * done}{' ' * (50-done)}] {wrote / total_size:.2%}", end='')
+                        print(f"\rDownloading file {file_num_string}. File size: {total_size / (1024 * 1024):.2f} MB [{'=' * done}{' ' * (50-done)}] {wrote / total_size:.2%}", end='', flush=True)
             os.rename(temp_file_path, file_path)
             seconds_taken = int(round((datetime.now()-start_time).total_seconds(), 0))
-            print("\r\033[K", end='')
+            print("\r\033[K", end='', flush=True)
             print(f"File {file_num_string}. Downloaded {total_size / (1024 * 1024):.2f} MB in {seconds_taken}s. Saved to: {file_path}")
         else:
             raise Exception(f"Failed to download {file_name}. Status code: {file_response.status_code}")
