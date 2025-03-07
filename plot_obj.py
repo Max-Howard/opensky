@@ -311,7 +311,7 @@ class FlightPath:
             )
             current_alt += BADA_PLOT_TIME_STEP * vertrate
             decent_distance_travelled += BADA_PLOT_TIME_STEP * velocity
-            
+
 
         decent_rows = decent_rows[::-1]
         decent_distances = decent_distances[::-1]
@@ -710,6 +710,33 @@ class FlightPath:
         plt.legend()
         plt.show()
 
+    def return_decent_alt(self, x_axis="time"):
+        """
+        Return the altitude data for the decent phase of the flight.
+        Used to compare the decent path of different flights.
+        """
+        assert x_axis in ["time", "distance"], "x_axis must be either 'time' or 'distance'."
+
+        one_hour_before_final = self.df["time"].iloc[-1] - 3600
+        decent_start_idx = self.df[(self.df["phase"] == "decent") & (self.df["time"] >= one_hour_before_final)].index[0]
+        decent_df = self.df.loc[decent_start_idx:]
+
+        if x_axis == "time":
+            data_start = decent_df["time"].iloc[0]
+            x: pd.Series = (decent_df["time"] - data_start) / 3600
+            xlabel:str = "Time (hours)"
+
+        elif x_axis == "distance":
+            x: pd.Series = decent_df["distance"] / 1000
+            xlabel:str = "Distance (km)"
+
+
+        y = decent_df["baroaltitude"]
+        ylabel:str = "Barometric Altitude (m)"
+        data_label:str = f"Landing at {self.destination_name}"
+
+        return x, y, xlabel, ylabel, data_label
+
 
 def load_flight_paths_obj() -> list[FlightPath]:
     flight_paths = []
@@ -732,15 +759,27 @@ def load_flight_paths_obj() -> list[FlightPath]:
 #     flight.plot_phases()
 #     flight.vert_rate_vs_altitude()
 
-for filename in os.listdir("./output"):
+descents = []
+for filename in os.listdir(FLIGHTS_DIR):
     if filename.endswith(".csv") or filename.endswith(".pkl"):
         flight = FlightPath(filename)
         print(flight)
         flight.clean_alt_data()
         flight.separate_legs()
         flight.interpolate_alt_gaps(alt_source="baroaltitude")
-        flight.plot_altitude(BADA=True, x_axis="distance")
-        flight.plot_flight_path(color_by="geoaltitude")
-        flight.plot_vert_rate()
-        flight.plot_phases()
-        flight.vert_rate_vs_altitude()
+        # flight.GS_to_TAS()
+        # flight.plot_altitude(BADA=True, x_axis="distance")
+        # flight.plot_flight_path(color_by="geoaltitude")
+        # flight.plot_velocity_vs_altitude()
+        # flight.plot_vert_rate()
+        # flight.plot_phases()
+        # flight.vert_rate_vs_altitude()
+        x,y,xlabel,ylabel,datalabel = flight.return_decent_alt(x_axis="time")
+        descents.append((x,y,xlabel,ylabel,datalabel))
+
+for descent in descents:
+    plt.scatter(descent[0], descent[1], label=descent[4])
+plt.xlabel(descents[0][2])
+plt.ylabel(descents[0][3])
+plt.legend()
+plt.show()
