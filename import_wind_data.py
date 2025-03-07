@@ -199,21 +199,76 @@ def download_files(year, month):
             raise Exception(f"Failed to download {file_name}. Status code: {file_response.status_code}")
     return save_dir
 
+def check_files(files_in):
+    """
+    Check files_in for missing attributes and variables
+
+    Parameters
+    ----------
+    files_in : list of str
+        Paths to the netCDF files containing MERRA-2 wind data.
+
+    Returns
+    -------
+    None.
+
+    """
+    for fpath in files_in:
+        print(f'Checking "{fpath}"...')
+        ds = xr.open_dataset(fpath, decode_times=False)
+        if np.max(ds["U"].isel(time=slice(0, 2), lev=slice(0, 2), lat=slice(0, 2), lon=slice(0, 2)).values) == 0:
+            print(f'\nWARNING: "{fpath}" contains only zeros in the checked slice\n')
+            input("Press Enter to continue...")
+        for var in ['U', 'V']:
+            if var not in ds.data_vars:
+                print(f'\nWARNING: variable "{var}" not found in "{fpath}\n"')
+                input("Press Enter to continue...")
+                break
+        for time in [90, 270, 450, 630, 810, 990, 1170, 1350]:
+            if time not in ds['time']:
+                print(f'\nWARNING: Incorrect time axis in "{fpath}"\n')
+                input("Press Enter to continue...")
+                break
+        for attr in ['Start_Date', 'End_Date', 'VersionID', 'Delta_Lon', 'Delta_Lat']:
+            if attr not in ds.attrs:
+                print(f'\nWARNING: attribute "{attr}" not found in "{fpath}"\n')
+                input("Press Enter to continue...")
+                break
+        for dim, length in {'time': 8, 'lev': 72, 'lat': 361, 'lon': 576}.items():
+            if dim not in ds.dims:
+                print(f'\nWARNING: dimension "{dim}" not found in "{fpath}"\n')
+                input("Press Enter to continue...")
+                break
+            elif ds.sizes[dim] != length:
+                print(f'\nWARNING: dimension "{dim}" has wrong size in "{fpath}"\n')
+                input("Press Enter to continue...")
+                break
+
 
 if __name__ == '__main__':
     year = '2024'
 
     # Download files
-    for month in [f'{m:02}' for m in range(1, 12 + 1)]:
-        save_path = download_files(year, month)
+    # for month in [f'{m:02}' for m in range(8, 12 + 1)]:
+    #     save_path = download_files(year, month)
 
-    # Process files
+    # # Process files
+    # for month in [f'{m:02}' for m in range(6, 12 + 1)]:
+    #     output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
+    #     search = f'{BASEDIR}{year}/{month}/' + r'*.A3dyn.*.nc4'
+    #     fpaths = glob.glob(search)
+    #     if len(fpaths) > 0:
+    #         print(f'Processing {len(fpaths)} files for "{year}/{month}".')
+    #         ds = process_files(fpaths, output_fpath)
+    #     else:
+    #         print(f'Warning: no files found for "{search}"')
+
+    
+    # Check files
     for month in [f'{m:02}' for m in range(1, 12 + 1)]:
-        output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
         search = f'{BASEDIR}{year}/{month}/' + r'*.A3dyn.*.nc4'
         fpaths = glob.glob(search)
         if len(fpaths) > 0:
-            print(f'Processing {len(fpaths)} files for "{year}/{month}".')
-            ds = process_files(fpaths, output_fpath)
+            check_files(fpaths)
         else:
             print(f'Warning: no files found for "{search}"')
