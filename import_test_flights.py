@@ -1,22 +1,19 @@
 from pyopensky.trino import Trino
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import os
 
 trino = Trino()
 
-scanning_stop = datetime.now()
-scanning_start = scanning_stop - timedelta(days=100)
-AIRCRAFT_DB = pd.read_csv("aircraft_db_clean.csv")
+scanning_stop = datetime(2024, 11, 30)
+scanning_start = datetime(2024, 11, 1)
+
+AIRCRAFT_DB = pd.read_csv("aircraft.csv")
 AIRPORT_DB = pd.read_csv("airports.csv")
 REQUESTED_COLUMNS = ["lastposupdate", "lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude"] # "time" ,lastcontact,  "onground", "icao24"
 PATH_FLIGHTS_TO_LOAD = "fcounts_sample.csv"
-FLIGHT_DATA_PATH = "output"
-
-# Max value for filtering out unrealistic data
-MAX_VELOCITY = 500  # Maximum velocity in m/s
-MAX_VERT_RATE = 100  # Maximum vertical rate in m/s
+FLIGHT_DATA_PATH = "RawFlightData"
 
 def find_bada_typecodes(bada_path = "./BADA"):
     typecodes = []
@@ -71,40 +68,6 @@ def clean_save_dir(backup=True):
             gitignore_file.write("*")
         print(f"Created {FLIGHT_DATA_PATH} folder for storing flight data")
 
-def clean_flight_data(flight_path: pd.DataFrame):
-    initial_length = len(flight_path)
-    flight_path = flight_path.dropna()                                  # Drop rows with missing data
-    len_after_empty_rm = len(flight_path)
-    flight_path = flight_path.sort_values(by='lastposupdate')           # Sort by time
-    flight_path = flight_path.drop_duplicates(subset=["lastposupdate"], keep="first") # Drop duplicate rows with without position update
-    flight_path = flight_path.reset_index(drop=True)                    # Reset index
-    len_after_duplicates_rm = len(flight_path)
-
-    # Remove rows where the data makes a jump larger than normal
-    # TODO implement a more sophisticated filter including other parameters
-
-    time_gap = flight_path['lastposupdate'].diff()
-
-    # Calculate the altitude change between consecutive rows
-    geo_altitude_diff = flight_path['geoaltitude'].diff()
-    baro_altitude_diff = flight_path['baroaltitude'].diff()
-    geo_altitude_rate = geo_altitude_diff / time_gap
-    baro_altitude_rate = baro_altitude_diff / time_gap
-    altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
-
-    # Filter out rows with unrealistic jumps
-    flight_path = flight_path[altitude_change_rate <= MAX_VERT_RATE]
-    len_after_anomalies_rm = len(flight_path)
-
-    if initial_length - len_after_anomalies_rm > 0:
-        rm_empty = initial_length - len_after_empty_rm
-        rm_duplicates = len_after_empty_rm - len_after_duplicates_rm
-        rm_anomalies = len_after_duplicates_rm - len_after_anomalies_rm
-        print(f"Initial length: {initial_length}, final length: {len_after_anomalies_rm}, total removed: {initial_length - len_after_anomalies_rm}")
-        print(f"Removed {rm_empty} rows due to missing data, {rm_duplicates} rows due to duplicate data and {rm_anomalies} rows due to anomalies")
-
-    return flight_path
-
 def flight_duration_from_fcount(flight_to_import):
 
     if not is_typecode(flight_to_import["typecode"]):
@@ -123,8 +86,7 @@ def flight_duration_from_fcount(flight_to_import):
         flight_durations = flight_durations.merge(AIRCRAFT_DB[['icao24', 'typecode']],on='icao24',how='left')
         initial_length = len(flight_durations)
         flight_durations = flight_durations.dropna(subset=['typecode'])
-        final_length = len(flight_durations)
-        removed_count = initial_length - final_length
+        removed_count = initial_length - len(flight_durations)
         if removed_count > 0:
             print(f"Removed {removed_count} flights due to missing typecode in database.")
         if len(flight_durations) >= flight_to_import["count"]:
@@ -180,33 +142,30 @@ def random_flights(limit=10):
         scanning_start,
         scanning_stop,
         limit=limit)
-    num_found = len(flight_durations)
     flight_durations = flight_durations.dropna() # subset=['departure', 'arrival']
-    after_na = len(flight_durations)
+    num_found = len(flight_durations)
     flight_durations = flight_durations.merge(AIRCRAFT_DB[['icao24', 'typecode']], on='icao24', how='left')
     flight_durations = flight_durations[flight_durations['typecode'].isin(BADA_TYPECODES)]
     after_typecode = len(flight_durations)
     flight_durations = flight_durations.rename(columns={"departure": "origin", "arrival": "destination"})
     flight_durations["origin_name"] = flight_durations["origin"].map(AIRPORT_DB.set_index("icao")["name"])
     flight_durations["destination_name"] = flight_durations["destination"].map(AIRPORT_DB.set_index("icao")["name"])
-    print(f"Searched for {limit} random flights, found {num_found} flights, after removing NA: {after_na}, after removing non-BADA typecodes: {after_typecode}")
+    print(f"Searched for {limit} random flights, found {num_found} flights, after removing non-BADA typecodes: {after_typecode}")
     return flight_durations
 
 
 def load_adsb_from_durations(flight_durations):
     for i in range(len(flight_durations)):
         flight_to_import = flight_durations.iloc[i]
-
+        print(f"Loading flight number {i+1} from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}, typecode {flight_to_import['typecode']}")
         flight_path = trino.history(start=flight_to_import["firstseen"],
                         stop=flight_to_import["lastseen"],
                         icao24=flight_to_import["icao24"],
                         selected_columns=REQUESTED_COLUMNS)
-
-        flight_path = clean_flight_data(flight_path)
-        flight_path = flight_path.rename(columns={"lastposupdate": "time"})
         filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{flight_to_import["icao24"]}_{i+1}.csv"""
         flight_path.to_csv(filename, index=False)
-        print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}\n""")
+        print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}""")
+    print("Finished loading flights.\n")
 
 
 clean_save_dir()
@@ -218,5 +177,5 @@ for i in range(len(flight_counts)):
     load_adsb_from_durations(flight_durations)
 
 
-# flight_durations = random_flights()
+# flight_durations = random_flights(50)
 # load_adsb_from_durations(flight_durations)

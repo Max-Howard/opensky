@@ -1,0 +1,182 @@
+import os
+import pandas as pd
+import numpy as np
+import shutil
+import xarray as xr
+from line_profiler import profile
+
+MET_DATA_DIR: str = "./met/wind_monthly_202411.nc4"
+MET_DATA = None
+RAW_DATA_DIR = "RawFlightData"
+OUTPUT_DIR = "ProcessedFlightData"
+
+def find_flight_files(directory: str):
+    flight_files = []
+    for file in os.listdir(directory):
+        if file.endswith(".csv"):
+            flight_files.append(file)
+    return flight_files
+
+def load_met_data(met_data_dir:str = MET_DATA_DIR):
+    print("Loading MET data... ", end="")
+    global MET_DATA
+    # MET_DATA = xr.open_dataset(met_data_dir)
+    MET_DATA = xr.open_dataset(met_data_dir).load() # Load the data into memory
+    print("done.")
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371e3  # Earth radius in meters
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(lat2)
+    delta_phi = np.radians(lat2 - lat1)
+    delta_lambda = np.radians(lon2 - lon1)
+    a = np.sin(delta_phi / 2) * np.sin(delta_phi / 2) + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2) * np.sin(delta_lambda / 2)
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return R * c
+
+def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
+    geo_altitude_diff = df['geoaltitude'].diff()
+    baro_altitude_diff = df['baroaltitude'].diff()
+    time_gap = df['time'].diff()
+    geo_altitude_rate = geo_altitude_diff / time_gap
+    baro_altitude_rate = baro_altitude_diff / time_gap
+    altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
+
+    # Identify indices where the altitude change rate exceeds the threshold
+    indices_to_drop = altitude_change_rate[altitude_change_rate > 25].index
+    # indices_to_drop = indices_to_drop.union(indices_to_drop + 1)
+    df.drop(indices_to_drop, inplace=True)
+
+    # Additional filtering: Remove rows with sharp jumps that return back to close to the previous value
+    threshold = 50  # Define a threshold for what constitutes a sharp jump
+    for col in ['geoaltitude', 'baroaltitude']:
+        jumps = df[col].diff().abs() > threshold
+        returns = df[col].diff(-1).abs() > threshold
+        indices_to_drop = df[jumps & returns].index
+        df.drop(indices_to_drop, inplace=True)
+
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+def round_values(df:pd.DataFrame) -> pd.DataFrame:
+    df['time'] = df['time'].round(2)
+    df['lat'] = df['lat'].round(6)
+    df['lon'] = df['lon'].round(6)
+    df['geoaltitude'] = df['geoaltitude'].round(1)
+    df['baroaltitude'] = df['baroaltitude'].round(1)
+    df['gs'] = df['gs'].round(1)
+    df['heading'] = df['heading'].round(1)
+    df['vertrate'] = df['vertrate'].round(1)
+
+    # Round MET data if available
+    if 'tas' in df.columns:
+        df['tas'] = df['tas'].round(1)
+    if 'wind_speed' in df.columns:
+        df['wind_speed'] = df['wind_speed'].round(1)
+    if 'wind_dir' in df.columns:
+        df['wind_dir'] = df['wind_dir'].round(1)
+    return df
+
+def calc_dist(df:pd.DataFrame) -> pd.DataFrame:
+    df.loc[0, 'dist'] = 0
+    for i in range(1, len(df)):
+        lat1 = df.loc[i-1, 'lat']
+        lon1 = df.loc[i-1, 'lon']
+        lat2 = df.loc[i, 'lat']
+        lon2 = df.loc[i, 'lon']
+        df.loc[i, 'dist'] = haversine(lat1, lon1, lat2, lon2)
+    df["dist"] = df["dist"].round(1)
+    return df
+
+def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate the True Airspeed (TAS) using the wind speed and direction from the MET data.
+    Currently using barometric altitude to find wind data, as Merra alts are calculated from pressure.
+    """
+
+    if MET_DATA is None:
+        raise ValueError("MET data has not been loaded.")
+
+    # Compute the indices for each dimension
+    # TODO this is calculating based off of edges, not centers. Can be improved.
+    df["lat_idx"] = np.digitize(df["lat"], MET_DATA["lat"].values)
+    df["lon_idx"] = np.digitize(df["lon"], MET_DATA["lon"].values)
+    df["time_idx"] = np.digitize(df["time"], MET_DATA["time"].values.astype(np.int64)/1e9) # TODO this is not selecting correct time
+    df["lev_idx"]  = np.digitize(df["geoaltitude"], MET_DATA["h_edge"].values) - 1 # TODO this is a temporary fix
+
+    print("Head of df time:", df["time"].head())
+    print("Head of met time:", MET_DATA["time"].values.astype(np.int64)[:5])
+
+    # Temporary code block to validate the indices are selecting the correct values
+    da_lat = xr.DataArray(df["lat_idx"].values, dims="points")
+    da_lon = xr.DataArray(df["lon_idx"].values, dims="points")
+    da_time = xr.DataArray(df["time_idx"].values, dims="points")
+    da_lev = xr.DataArray(df["lev_idx"].values, dims="points")
+    df["metlat"] = MET_DATA["lat"].isel(lat=da_lat).values
+    df["metlon"] = MET_DATA["lon"].isel(lon=da_lon).values
+    df["metalt"] = MET_DATA["h_edge"].isel(lev=da_lev).values
+    df["mettime"] = MET_DATA["time"].isel(time=da_time).values
+    df["datetime"] = pd.to_datetime(df["time"], unit="s")
+
+    # Find the unique groups of indices
+    unique_groups = df[["lat_idx", "lon_idx", "time_idx", "lev_idx"]].drop_duplicates().reset_index(drop=True)
+
+    # Create xarray DataArrays from unique groups for vectorized indexing
+    da_lat = xr.DataArray(unique_groups["lat_idx"].values, dims="points")
+    da_lon = xr.DataArray(unique_groups["lon_idx"].values, dims="points")
+    da_time = xr.DataArray(unique_groups["time_idx"].values, dims="points")
+    da_lev = xr.DataArray(unique_groups["lev_idx"].values, dims="points")
+
+    # Vectorized retrieval of wind speed and wind direction
+    unique_groups["wind_speed"] = MET_DATA["WS"].isel(lev=da_lev, lat=da_lat, lon=da_lon, time=da_time).values
+    unique_groups["wind_dir"] = MET_DATA["WDIR"].isel(lev=da_lev, lat=da_lat, lon=da_lon, time=da_time).values
+
+    # Merge the unique groups back into the original dataframe
+    df = df.merge(unique_groups, on=["lat_idx", "lon_idx", "time_idx", "lev_idx"], how="left")
+
+    # Calculate TAS using cosine rule
+    df["tas"] = np.sqrt(df["gs"]**2 + df["wind_speed"]**2 -
+        2 * df["gs"] * df["wind_speed"] * np.cos(np.radians(df["wind_dir"] - df["heading"])))
+
+    # Drop intermediate columns
+    df.drop(columns=["lat_idx", "lon_idx", "time_idx", "lev_idx"], inplace=True)
+    return df
+
+# Create the output directory
+if os.path.exists(OUTPUT_DIR):
+    remove_dir = input(f"The directory {OUTPUT_DIR} already exists. Do you want to remove it contents? (yes/no): ").strip().lower()
+    if remove_dir == 'yes':
+        shutil.rmtree(OUTPUT_DIR)
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
+    with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
+        gitignore.write("*\n")
+
+# Load the flight files and MET data
+flight_files = find_flight_files(RAW_DATA_DIR)
+load_met_data()
+
+def process_file(file_path: str) -> str:
+    # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
+    df = pd.read_csv(os.path.join(RAW_DATA_DIR,flight_file))
+    df.rename(columns={"lastposupdate": "time", "velocity": "gs"}, inplace=True)
+    df.dropna(inplace=True)
+    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
+    df.sort_values(by="time", inplace=True)
+    df.reset_index(drop=True,inplace=True)
+
+    # Run more intensive cleaning and processing operations
+    df = calc_dist(df)
+    df = clean_alts(df)
+    df = calc_tas(df)
+    df = round_values(df)
+
+    output_filepath = os.path.join(OUTPUT_DIR, flight_file)
+    df.to_csv(output_filepath, index=False)
+    return output_filepath
+
+# Process each flight file
+for flight_file in flight_files:
+    print(f"Processing {flight_file}... ", end="")
+    output_filepath = process_file(flight_file)
+    print("done. Saved to: ", output_filepath)
