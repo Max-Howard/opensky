@@ -6,10 +6,11 @@ from matplotlib.colors import Normalize
 from geographiclib.geodesic import Geodesic
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import xarray as xr
 
 geod = Geodesic.WGS84
 
-FLIGHTS_DIR = "./output"
+FLIGHTS_DIR = "./ProcessedFlightData"
 
 FT_TO_M = 0.3048
 KTS_TO_MPS = 0.514444
@@ -20,6 +21,7 @@ CRUISE_STEP = 50 * 1852  # 50 nautical miles in meters
 LTO_CEILING = 3000 * FT_TO_M
 AIRPORT_NAMES = pd.read_csv("airports.csv").set_index("icao")
 AC_CRUISE_LEVELS = pd.read_csv("cruise_fl.csv").set_index("typecode")
+MET_DATA = xr.open_dataset("./met/wind_monthly_202411.nc4")
 BADA_PLOT_TIME_STEP = 1
 
 
@@ -224,21 +226,6 @@ class FlightPath:
             closest_FL = self.ac_data["table"].index[np.abs(self.ac_data["table"].index - current_FL).argmin()]
             return self.ac_data["table"].loc[closest_FL]
 
-    def clean_alt_data(self):
-        # TODO better way to clean altitude data
-        initial_length = len(self.df)
-        mask = abs(self.df["baroaltitude"].diff().fillna(0) / self.time_gaps - self.df["vertrate"]) <= 50
-        self.df = self.df.loc[mask]
-        mid_length = len(self.df)
-        mask = abs(self.df["geoaltitude"].diff().fillna(0) / self.time_gaps - self.df["vertrate"]) <= 50
-        self.df = self.df.loc[mask]
-        final_length = len(self.df)
-        if initial_length - final_length > 0:
-            # print(f"{self.origin_name} to {self.destination_name} - {self.typecode} - {self.flight_num}")
-            print(f"Removed {initial_length - mid_length} rows due to baroaltitude anomalies.")
-            print(f"Removed {mid_length - final_length} rows due to geoaltitude anomalies.\n")
-        self.df = self.df.reset_index(drop=True)
-
     def calc_bada_path(self):
         """
         Calculate the path of the aircraft using BADA performance data.
@@ -354,7 +341,7 @@ class FlightPath:
         des_df["distance"] = decent_distances
         dist_cr_to_des_gap = total_distance - cruise_distance_travelled - decent_distance_travelled - climb_distance_travelled
         time_des_start = dist_cr_to_des_gap / cr_vel + self.bada_df["time"].iloc[-1]
-        des_df["time"] = np.arange(time_des_start, time_des_start + len(des_df) * BADA_PLOT_TIME_STEP, BADA_PLOT_TIME_STEP)
+        des_df["time"] = np.linspace(time_des_start, time_des_start + len(des_df) * BADA_PLOT_TIME_STEP, num=len(des_df), endpoint=False)
 
         self.bada_df = pd.concat([self.bada_df, des_df], ignore_index=True)
 
@@ -614,14 +601,19 @@ class FlightPath:
         plt.legend()
         plt.show()
 
-    def plot_velocity_vs_altitude(self):
+    def plot_velocity_vs_altitude(self, SepratePhases=False):
 
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vcl"], label="BADA Climb Velocity", c = "red")
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vcr"], label="BADA Cruise Velocity", c = "green")
         plt.plot(self.ac_data["table"].index * 100 * FT_TO_M, self.ac_data["table"]["Vdes"], label="BADA Descent Velocity", c = "blue")
-        for phase in self.df["phase"].unique():
-            phase_df = self.df[self.df["phase"] == phase]
-            plt.scatter(phase_df['baroaltitude'], phase_df["velocity"]/KTS_TO_MPS, s=8, label=phase, alpha=1)
+        if SepratePhases:
+            for phase in self.df["phase"].unique():
+                phase_df = self.df[self.df["phase"] == phase]
+                plt.scatter(phase_df['baroaltitude'], phase_df["gs"]/KTS_TO_MPS, s=8, label=phase + "gs", alpha=1)
+                plt.scatter(phase_df['geoaltitude'], phase_df["tas"]/KTS_TO_MPS, s=8, label=phase + "tas", alpha=1)
+        else:
+            plt.scatter(self.df['baroaltitude'], self.df["gs"]/KTS_TO_MPS, s=8, label="GS", alpha=1)
+            plt.scatter(self.df['geoaltitude'], self.df["tas"]/KTS_TO_MPS, s=8, label="TAS", alpha=1)
 
         plt.xlabel("Altitude (m)")
         plt.ylabel("Velocity (knots)")
@@ -677,6 +669,31 @@ class FlightPath:
             max_altitude = max(self.df[cbar_source])
             min_altitude = min(self.df[cbar_source])
             norm = Normalize(vmin=min_altitude, vmax=max_altitude)
+        elif color_by == "tailwind":
+            self.df["tailwind"] = self.df["gs"] - self.df["tas"]
+            cbar_label = "Tailwind (m/s)"
+            cbar_source = "tailwind"
+            max_tailwind = max(self.df["tailwind"])
+            min_tailwind = min(self.df["tailwind"])
+            norm = Normalize(vmin=min_tailwind, vmax=max_tailwind)
+
+            lat_idx= np.digitize(self.df["lat"], MET_DATA["lat"].values)
+            lon_idx = np.digitize(self.df["lon"], MET_DATA["lon"].values)
+            time_idx = np.digitize(self.df["time"], MET_DATA["time"].values.astype(np.int64)/1e9)
+            cruiselev = max(np.digitize(self.df["geoaltitude"], MET_DATA["h_edge"].values) - 1)
+            met = MET_DATA.sel(lev=cruiselev, method='nearest')
+            # removed some arrows here
+            met = met.isel(lat=slice(min(lat_idx), max(lat_idx)+1, 5), lon=slice(min(lon_idx), max(lon_idx)+1, 5), time=time_idx[len(time_idx)//2])
+            lat = met["lat"].values
+            lon = met["lon"].values
+            WS = met["WS"].values
+            WDIR = met["WDIR"].values
+            u = -WS * np.sin(np.radians(WDIR))
+            v = -WS * np.cos(np.radians(WDIR))
+            quiver = ax.quiver(lon, lat, u, v, transform=ccrs.PlateCarree(), scale=500)
+
+            # Add a quiver key to explain arrow length (optional)
+            plt.quiverkey(quiver, 0.9, -0.1, 10, "10 m/s", labelpos='E')
 
 
         points = plt.scatter(
@@ -763,23 +780,26 @@ descents = []
 for filename in os.listdir(FLIGHTS_DIR):
     if filename.endswith(".csv") or filename.endswith(".pkl"):
         flight = FlightPath(filename)
-        print(flight)
-        flight.clean_alt_data()
+        # print(flight)
+        # flight.clean_alt_data()
+        flight.calc_bada_path()
+
         flight.separate_legs()
-        flight.interpolate_alt_gaps(alt_source="baroaltitude")
+        # flight.interpolate_alt_gaps(alt_source="baroaltitude")
         # flight.GS_to_TAS()
-        # flight.plot_altitude(BADA=True, x_axis="distance")
+        flight.plot_altitude(BADA=True, x_axis="distance")
         # flight.plot_flight_path(color_by="geoaltitude")
-        # flight.plot_velocity_vs_altitude()
+        flight.plot_flight_path(color_by="tailwind")
+        flight.plot_velocity_vs_altitude()
         # flight.plot_vert_rate()
         # flight.plot_phases()
         # flight.vert_rate_vs_altitude()
-        x,y,xlabel,ylabel,datalabel = flight.return_decent_alt(x_axis="time")
-        descents.append((x,y,xlabel,ylabel,datalabel))
+        # x,y,xlabel,ylabel,datalabel = flight.return_decent_alt(x_axis="time")
+        # descents.append((x,y,xlabel,ylabel,datalabel))
 
-for descent in descents:
-    plt.scatter(descent[0], descent[1], label=descent[4])
-plt.xlabel(descents[0][2])
-plt.ylabel(descents[0][3])
-plt.legend()
-plt.show()
+# for descent in descents:
+#     plt.scatter(descent[0], descent[1], label=descent[4])
+# plt.xlabel(descents[0][2])
+# plt.ylabel(descents[0][3])
+# plt.legend()
+# plt.show()
