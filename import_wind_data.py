@@ -37,6 +37,15 @@ def process_files(files_in, file_out, nlayers=32):
         clockwise from north].
 
     """
+    # Ensure the output directory exists
+    output_dir = os.path.dirname(file_out)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # Create a .gitignore file if it doesn't exist
+    gitignore_path = os.path.join(output_dir, '.gitignore')
+    if not os.path.exists(gitignore_path):
+        with open(gitignore_path, 'w') as gitignore_file:
+            gitignore_file.write('*\n')
     H_EDGES = np.array(
         [-6, 123, 254, 387, 521, 657, 795, 934, 1075, 1218, 1363, 1510, 1659,
          1860, 2118, 2382, 2654, 2932, 3219, 3665, 4132, 4623, 5142, 5692,
@@ -249,21 +258,20 @@ if __name__ == '__main__':
     year = '2024'
 
     # Download files
-    # for month in [f'{m:02}' for m in range(8, 12 + 1)]:
-    #     save_path = download_files(year, month)
+    for month in [f'{m:02}' for m in range(8, 12 + 1)]:
+        save_path = download_files(year, month)
 
-    # # Process files
-    # for month in [f'{m:02}' for m in range(6, 12 + 1)]:
-    #     output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
-    #     search = f'{BASEDIR}{year}/{month}/' + r'*.A3dyn.*.nc4'
-    #     fpaths = glob.glob(search)
-    #     if len(fpaths) > 0:
-    #         print(f'Processing {len(fpaths)} files for "{year}/{month}".')
-    #         ds = process_files(fpaths, output_fpath)
-    #     else:
-    #         print(f'Warning: no files found for "{search}"')
+    # Process files
+    for month in [f'{m:02}' for m in range(6, 12 + 1)]:
+        output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
+        search = f'{BASEDIR}{year}/{month}/' + r'*.A3dyn.*.nc4'
+        fpaths = glob.glob(search)
+        if len(fpaths) > 0:
+            print(f'Processing {len(fpaths)} files for "{year}/{month}".')
+            ds = process_files(fpaths, output_fpath)
+        else:
+            print(f'Warning: no files found for "{search}"')
 
-    
     # Check files
     for month in [f'{m:02}' for m in range(1, 12 + 1)]:
         search = f'{BASEDIR}{year}/{month}/' + r'*.A3dyn.*.nc4'
