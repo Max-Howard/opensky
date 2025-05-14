@@ -158,7 +158,7 @@ class FlightPath:
         self.destination_ap_data = AIRPORT_NAMES.loc[self.destination_icao]
         self.origin_name = self.origin_ap_data["name"]
         self.destination_name = self.destination_ap_data["name"]
-        self.ac_data = read_ptf(f"./BADA/{self.typecode}__.ptf")
+        self.ac_data = read_ptf(f"./BADA/{self.typecode}__.PTF")
         self.bada_df = None
         self.interp_df = None
         self.time_gaps = self.df["time"].diff()
