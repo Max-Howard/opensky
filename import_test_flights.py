@@ -202,7 +202,7 @@ def load_adsb_from_durations(flight_durations):
                         selected_columns=REQUESTED_COLUMNS)
         filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{flight_to_import["icao24"]}_{i+1}.csv"""
         flight_path.to_csv(filename, index=False)
-        print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}. Time taken: {time.time() - start:.2f} seconds""")
+        print(f"""Saved to {filename}. Time taken: {time.time() - start:.2f} seconds""")
     print("Finished loading flights.\n")
 
 
