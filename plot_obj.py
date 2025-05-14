@@ -248,88 +248,92 @@ class FlightPath:
 
         total_distance = line.s13
 
-        #   First calculate the climb path
-        climb_rows = []
-        climb_distance_travelled = 0
-        current_alt = alt_start
+        while True: # Need to iterate in the case that it is not possible to climb to cruise alt within distance
+            
+            #   First calculate the climb path
+            climb_rows = []
+            climb_distance_travelled = 0
+            current_alt = alt_start
 
-        while current_alt < alt_cruise:
-            bada_perf = self.find_ac_perf(current_alt)
-            velocity = bada_perf["Vcl"] * KTS_TO_MPS
-            vertrate = bada_perf["ROCDnom_cl"] * FT_TO_M / 60
-            line_position = line.Position(climb_distance_travelled)
-            current_lat = line_position["lat2"]
-            current_lon = line_position["lon2"]
-            climb_rows.append(
-                {
-                    "alt": current_alt,
-                    "lat": current_lat,
-                    "lon": current_lon,
-                    "vertrate": vertrate,
-                    "velocity": velocity,
-                    "distance": climb_distance_travelled,
-                }
-            )
-            current_alt += BADA_PLOT_TIME_STEP * vertrate
-            climb_distance_travelled += BADA_PLOT_TIME_STEP * velocity
-
-        # Decent path
-        decent_rows = []
-        decent_distance_travelled = 0
-        current_alt = alt_stop
-
-        decent_distances = []
-        while current_alt < alt_cruise:
-            bada_perf = self.find_ac_perf(current_alt)
-            velocity = bada_perf["Vdes"] * KTS_TO_MPS
-            vertrate = bada_perf["ROCDnom_des"] * FT_TO_M / 60
-            line_position = line_inv.Position(decent_distance_travelled)
-            current_lat = line_position["lat2"]
-            current_lon = line_position["lon2"]
-            decent_distances.append(decent_distance_travelled)
-            decent_rows.append(
-                {
-                    "alt": current_alt,
-                    "lat": current_lat,
-                    "lon": current_lon,
-                    "vertrate": vertrate,
-                    "velocity": velocity,
-                }
-            )
-            current_alt += BADA_PLOT_TIME_STEP * vertrate
-            decent_distance_travelled += BADA_PLOT_TIME_STEP * velocity
-
-
-        decent_rows = decent_rows[::-1]
-        decent_distances = decent_distances[::-1]
-
-        if climb_distance_travelled + decent_distance_travelled > total_distance:
-            raise ValueError(
-                "Not enough distance climb to and decend from cruise altitude.\nImplement a better way to calculate the path."
-            )
-
-        else:
-            # Cruise path
-            cruise_rows = []
-            cr_vel = self.find_ac_perf(alt_cruise)["Vcr"] * KTS_TO_MPS
-            cruise_distance_needed = total_distance - decent_distance_travelled - climb_distance_travelled
-            cruise_distance_travelled = BADA_PLOT_TIME_STEP * cr_vel  # First point is not same position as last climb point
-
-            while cruise_distance_travelled < cruise_distance_needed:
-                line_position = line.Position(climb_distance_travelled + cruise_distance_travelled)
+            while current_alt < alt_cruise:
+                bada_perf = self.find_ac_perf(current_alt)
+                velocity = bada_perf["Vcl"] * KTS_TO_MPS
+                vertrate = bada_perf["ROCDnom_cl"] * FT_TO_M / 60
+                line_position = line.Position(climb_distance_travelled)
                 current_lat = line_position["lat2"]
                 current_lon = line_position["lon2"]
-                cruise_rows.append(
+                climb_rows.append(
                     {
-                        "alt": alt_cruise,
+                        "alt": current_alt,
                         "lat": current_lat,
                         "lon": current_lon,
-                        "vertrate": 0,
-                        "velocity": cr_vel,
-                        "distance": climb_distance_travelled + cruise_distance_travelled,
+                        "vertrate": vertrate,
+                        "velocity": velocity,
+                        "distance": climb_distance_travelled,
                     }
                 )
-                cruise_distance_travelled += BADA_PLOT_TIME_STEP * cr_vel
+                current_alt += BADA_PLOT_TIME_STEP * vertrate
+                climb_distance_travelled += BADA_PLOT_TIME_STEP * velocity
+
+            # Decent path
+            decent_rows = []
+            decent_distance_travelled = 0
+            current_alt = alt_stop
+
+            decent_distances = []
+            while current_alt < alt_cruise:
+                bada_perf = self.find_ac_perf(current_alt)
+                velocity = bada_perf["Vdes"] * KTS_TO_MPS
+                vertrate = bada_perf["ROCDnom_des"] * FT_TO_M / 60
+                line_position = line_inv.Position(decent_distance_travelled)
+                current_lat = line_position["lat2"]
+                current_lon = line_position["lon2"]
+                decent_distances.append(decent_distance_travelled)
+                decent_rows.append(
+                    {
+                        "alt": current_alt,
+                        "lat": current_lat,
+                        "lon": current_lon,
+                        "vertrate": vertrate,
+                        "velocity": velocity,
+                    }
+                )
+                current_alt += BADA_PLOT_TIME_STEP * vertrate
+                decent_distance_travelled += BADA_PLOT_TIME_STEP * velocity
+
+
+            decent_rows = decent_rows[::-1]
+            decent_distances = decent_distances[::-1]
+
+            if climb_distance_travelled + decent_distance_travelled > total_distance:
+                print("Not enough distance climb to and decend from cruise altitude. Reducing target.")
+                alt_cruise -= 500
+
+            else:
+                print("test123")
+                break
+
+        # Cruise path
+        cruise_rows = []
+        cr_vel = self.find_ac_perf(alt_cruise)["Vcr"] * KTS_TO_MPS
+        cruise_distance_needed = total_distance - decent_distance_travelled - climb_distance_travelled
+        cruise_distance_travelled = BADA_PLOT_TIME_STEP * cr_vel  # First point is not same position as last climb point
+
+        while cruise_distance_travelled < cruise_distance_needed:
+            line_position = line.Position(climb_distance_travelled + cruise_distance_travelled)
+            current_lat = line_position["lat2"]
+            current_lon = line_position["lon2"]
+            cruise_rows.append(
+                {
+                    "alt": alt_cruise,
+                    "lat": current_lat,
+                    "lon": current_lon,
+                    "vertrate": 0,
+                    "velocity": cr_vel,
+                    "distance": climb_distance_travelled + cruise_distance_travelled,
+                }
+            )
+            cruise_distance_travelled += BADA_PLOT_TIME_STEP * cr_vel
 
 
         self.bada_df = pd.DataFrame(climb_rows + cruise_rows)
