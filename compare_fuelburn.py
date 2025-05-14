@@ -115,7 +115,7 @@ def read_ptf(filepath):
 
     return ptf
 
-example_ac = read_ptf("./BADA/A320__.ptf")["table"]
+example_ac = read_ptf("./BADA/A320__.PTF")["table"]
 example_ac.dropna(inplace=True)
 
 flow_max = max(max(example_ac["fnom_cl"]), max(example_ac["fnom_des"]))
