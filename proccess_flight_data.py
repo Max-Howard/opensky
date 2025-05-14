@@ -17,11 +17,12 @@ def find_flight_files(directory: str):
     return flight_files
 
 def load_met_data(met_data_dir:str = MET_DATA_DIR):
-    print("Loading MET data... ", end="")
-    global MET_DATA
+    print("Loading MET data... ", end="", flush=True)
     # MET_DATA = xr.open_dataset(met_data_dir)
-    MET_DATA = xr.open_dataset(met_data_dir).load() # Load the data into memory
+    MET_DATA = xr.open_dataset(met_data_dir).load() # Load the data into RAM
     print("done.")
+    return MET_DATA
+
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371e3  # Earth radius in meters
@@ -127,19 +128,15 @@ def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
     df.drop(columns=["lat_idx", "lon_idx", "time_idx", "lev_idx"], inplace=True)
     return df
 
-# Create the output directory
-if os.path.exists(OUTPUT_DIR):
-    remove_dir = input(f"The directory {OUTPUT_DIR} already exists. Do you want to remove it contents? (yes/no): ").strip().lower()
-    if remove_dir == 'yes':
-        shutil.rmtree(OUTPUT_DIR)
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-    with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
-        gitignore.write("*\n")
-
-# Load the flight files and MET data
-flight_files = find_flight_files(RAW_DATA_DIR)
-load_met_data()
+def create_save_dir():
+    if os.path.exists(OUTPUT_DIR):
+        remove_dir = input(f"The directory {OUTPUT_DIR} already exists. Do you want to remove it contents? (yes/no): ").strip().lower()
+        if remove_dir == 'yes':
+            shutil.rmtree(OUTPUT_DIR)
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
+            gitignore.write("*\n")
 
 def process_file(file_path: str) -> str:
     # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
@@ -159,6 +156,11 @@ def process_file(file_path: str) -> str:
     output_filepath = os.path.join(OUTPUT_DIR, flight_file)
     df.to_csv(output_filepath, index=False)
     return output_filepath
+
+
+create_save_dir()
+flight_files = find_flight_files(RAW_DATA_DIR)
+MET_DATA = load_met_data()
 
 # Process each flight file
 for flight_file in flight_files:
