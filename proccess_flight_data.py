@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import shutil
 import xarray as xr
-from line_profiler import profile
 
 MET_DATA_DIR: str = "./met/wind_monthly_202411.nc4"
 MET_DATA = None
@@ -103,20 +102,6 @@ def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
     df["lon_idx"] = np.digitize(df["lon"], MET_DATA["lon"].values)
     df["time_idx"] = np.digitize(df["time"], MET_DATA["time"].values.astype(np.int64)/1e9) # TODO this is not selecting correct time
     df["lev_idx"]  = np.digitize(df["geoaltitude"], MET_DATA["h_edge"].values) - 1 # TODO this is a temporary fix
-
-    print("Head of df time:", df["time"].head())
-    print("Head of met time:", MET_DATA["time"].values.astype(np.int64)[:5])
-
-    # Temporary code block to validate the indices are selecting the correct values
-    da_lat = xr.DataArray(df["lat_idx"].values, dims="points")
-    da_lon = xr.DataArray(df["lon_idx"].values, dims="points")
-    da_time = xr.DataArray(df["time_idx"].values, dims="points")
-    da_lev = xr.DataArray(df["lev_idx"].values, dims="points")
-    df["metlat"] = MET_DATA["lat"].isel(lat=da_lat).values
-    df["metlon"] = MET_DATA["lon"].isel(lon=da_lon).values
-    df["metalt"] = MET_DATA["h_edge"].isel(lev=da_lev).values
-    df["mettime"] = MET_DATA["time"].isel(time=da_time).values
-    df["datetime"] = pd.to_datetime(df["time"], unit="s")
 
     # Find the unique groups of indices
     unique_groups = df[["lat_idx", "lon_idx", "time_idx", "lev_idx"]].drop_duplicates().reset_index(drop=True)
