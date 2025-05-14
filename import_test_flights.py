@@ -3,6 +3,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import os
+import time
 
 trino = Trino()
 
@@ -37,6 +38,28 @@ def is_typecode(typecode):
         return True
     return not np.isnan(num)
 
+def limit_to_region(flight_durations, region):
+    """
+    Limit the flight durations to a specific continent.
+    Continents:
+    - EU: Europe
+    - US: North America
+    - AS: Asia
+    - AF: Africa
+    - OC: Oceania
+    - SA: South America
+    - AN: Antarctica
+    """
+    if region == "US":
+        airports_icao = AIRPORT_DB[AIRPORT_DB["iso_country"] == "US"]["icao"]
+    elif region in ['OC', 'AS', 'AF', 'AN', 'EU', 'SA']:
+        airports_icao = AIRPORT_DB[AIRPORT_DB["continent"] == region]["icao"]
+    else:
+        raise Exception(f"Unknown region: {region}. Use 'EU', 'US', 'AS', 'AF', 'OC', 'SA' or 'AN'.")
+
+    flight_durations = flight_durations[flight_durations["origin"].isin(airports_icao) & flight_durations["destination"].isin(airports_icao)]
+    return flight_durations
+
 def load_fcounts(fcount_path=PATH_FLIGHTS_TO_LOAD):
     """
     Load the flight counts from CSV, and add the origin and destination ICAO names
@@ -46,7 +69,18 @@ def load_fcounts(fcount_path=PATH_FLIGHTS_TO_LOAD):
     flight_counts["destination_name"] = flight_counts["destination"].map(AIRPORT_DB.set_index("icao")["name"])
     return flight_counts
 
-def clean_save_dir(backup=True):
+def clean_save_dir():
+    backup = True
+    if os.path.exists(FLIGHT_DATA_PATH):
+        response = input(f"Overwrite current data in {FLIGHT_DATA_PATH} folder? (Y/n): ").lower()
+        if response == "y" or response == "":
+            backup = False
+        elif response == "n":
+            backup = True
+        else:
+            print("Invalid input. Defaulting to backup.")
+            backup = True
+
     if backup and os.path.exists(FLIGHT_DATA_PATH):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_dir = f"{FLIGHT_DATA_PATH}_backup_{timestamp}"
@@ -56,7 +90,7 @@ def clean_save_dir(backup=True):
             gitignore_file.write("*")
         print(f"Moved {FLIGHT_DATA_PATH} to {backup_dir}")
     elif os.path.exists(FLIGHT_DATA_PATH):
-        input(f"This will delete all files in the {FLIGHT_DATA_PATH} directory. Press enter to continue.")
+        # input(f"This will delete all files in the {FLIGHT_DATA_PATH} directory. Press enter to continue.")
         for filename in os.listdir(FLIGHT_DATA_PATH):
             file_path = os.path.join(FLIGHT_DATA_PATH, filename)
             if filename != ".gitignore" and os.path.isfile(file_path):
@@ -137,7 +171,7 @@ def flight_duration_from_fcount(flight_to_import):
     return flight_durations
 
 
-def random_flights(limit=10):
+def random_flights(limit=10, region=None):
     flight_durations = trino.flightlist(
         scanning_start,
         scanning_stop,
@@ -151,31 +185,35 @@ def random_flights(limit=10):
     flight_durations["origin_name"] = flight_durations["origin"].map(AIRPORT_DB.set_index("icao")["name"])
     flight_durations["destination_name"] = flight_durations["destination"].map(AIRPORT_DB.set_index("icao")["name"])
     print(f"Searched for {limit} random flights, found {num_found} flights, after removing non-BADA typecodes: {after_typecode}")
+    if region is not None:
+        flight_durations = limit_to_region(flight_durations, region)
+        print(f"Limited to region {region}, {len(flight_durations)} flights remain.")
     return flight_durations
 
 
 def load_adsb_from_durations(flight_durations):
     for i in range(len(flight_durations)):
+        start = time.time()
         flight_to_import = flight_durations.iloc[i]
-        print(f"Loading flight number {i+1} from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}, typecode {flight_to_import['typecode']}")
+        print(f"Loading flight number {i+1}/{len(flight_durations)} from {flight_to_import['origin_name']} to {flight_to_import['destination_name']}, typecode {flight_to_import['typecode']}")
         flight_path = trino.history(start=flight_to_import["firstseen"],
                         stop=flight_to_import["lastseen"],
                         icao24=flight_to_import["icao24"],
                         selected_columns=REQUESTED_COLUMNS)
         filename = f"""{FLIGHT_DATA_PATH}/{flight_to_import["origin"]}_{flight_to_import["destination"]}_{flight_to_import["typecode"]}_{flight_to_import["icao24"]}_{i+1}.csv"""
         flight_path.to_csv(filename, index=False)
-        print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}""")
+        print(f"""Saved {flight_to_import["origin_name"]} to {flight_to_import["destination_name"]}, flight number {i+1} as {filename}. Time taken: {time.time() - start:.2f} seconds""")
     print("Finished loading flights.\n")
 
 
 clean_save_dir()
 
-flight_counts = load_fcounts()
-for i in range(len(flight_counts)):
-    flight_to_import = flight_counts.iloc[i]
-    flight_durations = flight_duration_from_fcount(flight_to_import)
-    load_adsb_from_durations(flight_durations)
+# flight_counts = load_fcounts()
+# for i in range(len(flight_counts)):
+#     flight_to_import = flight_counts.iloc[i]
+#     flight_durations = flight_duration_from_fcount(flight_to_import)
+#     load_adsb_from_durations(flight_durations)
 
 
-# flight_durations = random_flights(50)
-# load_adsb_from_durations(flight_durations)
+flight_durations = random_flights(1000, region="EU")
+load_adsb_from_durations(flight_durations)
