@@ -139,6 +139,7 @@ def create_save_dir():
             gitignore.write("*\n")
 
 def process_file(file_path: str) -> str:
+    print(f"Processing {flight_file}... ", end="")
     # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
     df = pd.read_csv(os.path.join(RAW_DATA_DIR,flight_file))
     df.rename(columns={"lastposupdate": "time", "velocity": "gs"}, inplace=True)
@@ -147,15 +148,23 @@ def process_file(file_path: str) -> str:
     df.sort_values(by="time", inplace=True)
     df.reset_index(drop=True,inplace=True)
 
+    # Remove files with large gaps in data
+    if max(df["time"].diff()) >= 100:
+        print("skipping due to patchy data.")
+        return
+
     # Run more intensive cleaning and processing operations
     df = calc_dist(df)
     df = clean_alts(df)
     df = calc_tas(df)
     df = round_values(df)
 
+    # Remove duplicates again after rounding
+    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
+
     output_filepath = os.path.join(OUTPUT_DIR, flight_file)
     df.to_csv(output_filepath, index=False)
-    return output_filepath
+    print("done. Saved to: ", output_filepath)
 
 
 create_save_dir()
@@ -164,6 +173,4 @@ MET_DATA = load_met_data()
 
 # Process each flight file
 for flight_file in flight_files:
-    print(f"Processing {flight_file}... ", end="")
-    output_filepath = process_file(flight_file)
-    print("done. Saved to: ", output_filepath)
+    process_file(flight_file)
