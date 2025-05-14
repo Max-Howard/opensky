@@ -337,9 +337,6 @@ def plot_cartopy(flight_paths, color_by="velocity"):
       # Plot the flight paths
       for flight_path_name, flight_path in flight_paths.items():
 
-            if flight_path_name != "OMDB_EGLL_B788_4242f4_1":
-                  continue
-
             # Remove the interpolated points before plotting the scatter points
             if 'interpolated' in flight_path.columns:
                   plt.plot(flight_path['lon'], flight_path['lat'], c='red', linestyle='-', linewidth=0.5, alpha=0.7) #, label=f'{flight_path_name} Path'
