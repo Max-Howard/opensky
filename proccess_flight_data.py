@@ -17,16 +17,18 @@ def find_flight_files(directory: str):
             flight_files.append(file)
     return flight_files
 
-def load_met_data(met_data_dir:str = MET_DATA_DIR, slice=None):
+
+def load_met_data(met_data_dir: str = MET_DATA_DIR, slice=None):
     print("Loading MET data... ", end="", flush=True)
     ds = xr.open_dataset(met_data_dir)
     if slice is not None:
         ds = ds.isel(time=slice)
 
-    # Load into ram
+    # Load into RAM
     MET_DATA = ds.load()
     print("done.")
     return MET_DATA
+
 
 def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     geo_altitude_diff = df['geoaltitude'].diff()
@@ -36,13 +38,10 @@ def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     baro_altitude_rate = baro_altitude_diff / time_gap
     altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
 
-    # Identify indices where the altitude change rate exceeds the threshold
     indices_to_drop = altitude_change_rate[altitude_change_rate > 25].index
-    # indices_to_drop = indices_to_drop.union(indices_to_drop + 1)
     df.drop(indices_to_drop, inplace=True)
 
-    # Additional filtering: Remove rows with sharp jumps that return back to close to the previous value
-    threshold = 50  # Define a threshold for what constitutes a sharp jump
+    threshold = 50
     for col in ['geoaltitude', 'baroaltitude']:
         jumps = df[col].diff().abs() > threshold
         returns = df[col].diff(-1).abs() > threshold
@@ -52,7 +51,8 @@ def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     df.reset_index(drop=True, inplace=True)
     return df
 
-def round_values(df:pd.DataFrame) -> pd.DataFrame:
+
+def round_values(df: pd.DataFrame) -> pd.DataFrame:
     df['time'] = df['time'].round(2)
     df['lat'] = df['lat'].round(6)
     df['lon'] = df['lon'].round(6)
@@ -62,7 +62,6 @@ def round_values(df:pd.DataFrame) -> pd.DataFrame:
     df['heading'] = df['heading'].round(1)
     df['vertrate'] = df['vertrate'].round(1)
 
-    # Round MET data if available
     if 'tas' in df.columns:
         df['tas'] = df['tas'].round(1)
     if 'wind_speed' in df.columns:
@@ -70,6 +69,7 @@ def round_values(df:pd.DataFrame) -> pd.DataFrame:
     if 'wind_dir' in df.columns:
         df['wind_dir'] = df['wind_dir'].round(1)
     return df
+
 
 def calc_dist(df: pd.DataFrame) -> pd.DataFrame:
     lat = np.radians(df['lat'].to_numpy())
@@ -85,6 +85,7 @@ def calc_dist(df: pd.DataFrame) -> pd.DataFrame:
 
     df['dist'] = np.round(dist, 1)
     return df
+
 
 def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -126,6 +127,7 @@ def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
     df.drop(columns=["lat_idx", "lon_idx", "time_idx", "lev_idx"], inplace=True)
     return df
 
+
 def create_save_dir():
     if os.path.exists(OUTPUT_DIR):
         remove_dir = input(f"The directory {OUTPUT_DIR} already exists. Do you want to remove it contents? (yes/no): ").strip().lower()
@@ -136,6 +138,7 @@ def create_save_dir():
         with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
             gitignore.write("*\n")
 
+
 def process_file(flight_file_path: str):
     # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
     df = pd.read_csv(os.path.join(RAW_DATA_DIR, flight_file_path))
@@ -145,10 +148,7 @@ def process_file(flight_file_path: str):
     df.sort_values(by="time", inplace=True)
     df.reset_index(drop=True, inplace=True)
 
-    # Skip bad files
-    if len(df) < 100:
-        return flight_file_path
-    if max(df["time"].diff()) >= 100:
+    if len(df) < 100 or max(df["time"].diff()) >= 100:
         return flight_file_path
 
     # Run more intensive cleaning and processing operations
@@ -159,16 +159,14 @@ def process_file(flight_file_path: str):
 
     # Remove duplicates again after rounding
     df.drop_duplicates(subset=["time"], keep="first", inplace=True)
-
-    output_filepath = os.path.join(OUTPUT_DIR, flight_file_path)
-    df.to_csv(output_filepath, index=False)
+    df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
     return None
 
 
 if __name__ == "__main__":
     create_save_dir()
     flight_file_paths = find_flight_files(RAW_DATA_DIR)
-    MET_DATA = load_met_data(slice=slice(0, 16)) # Load only two days of data 
+    MET_DATA = load_met_data(slice=slice(0, 16))  # Load only two days of data
 
     skipped_files = []
     for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
