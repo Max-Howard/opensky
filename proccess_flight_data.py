@@ -17,10 +17,14 @@ def find_flight_files(directory: str):
             flight_files.append(file)
     return flight_files
 
-def load_met_data(met_data_dir:str = MET_DATA_DIR):
+def load_met_data(met_data_dir:str = MET_DATA_DIR, slice=None):
     print("Loading MET data... ", end="", flush=True)
-    # MET_DATA = xr.open_dataset(met_data_dir)
-    MET_DATA = xr.open_dataset(met_data_dir).load() # Load the data into RAM
+    ds = xr.open_dataset(met_data_dir)
+    if slice is not None:
+        ds = ds.isel(time=slice)
+
+    # Load into ram
+    MET_DATA = ds.load()
     print("done.")
     return MET_DATA
 
@@ -164,7 +168,7 @@ def process_file(flight_file_path: str):
 if __name__ == "__main__":
     create_save_dir()
     flight_file_paths = find_flight_files(RAW_DATA_DIR)
-    MET_DATA = load_met_data()
+    MET_DATA = load_met_data(slice=slice(0, 16)) # Load only two days of data 
 
     skipped_files = []
     for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
