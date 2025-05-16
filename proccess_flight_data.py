@@ -24,17 +24,6 @@ def load_met_data(met_data_dir:str = MET_DATA_DIR):
     print("done.")
     return MET_DATA
 
-
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371e3  # Earth radius in meters
-    phi1 = np.radians(lat1)
-    phi2 = np.radians(lat2)
-    delta_phi = np.radians(lat2 - lat1)
-    delta_lambda = np.radians(lon2 - lon1)
-    a = np.sin(delta_phi / 2) * np.sin(delta_phi / 2) + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2) * np.sin(delta_lambda / 2)
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return R * c
-
 def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     geo_altitude_diff = df['geoaltitude'].diff()
     baro_altitude_diff = df['baroaltitude'].diff()
@@ -78,15 +67,19 @@ def round_values(df:pd.DataFrame) -> pd.DataFrame:
         df['wind_dir'] = df['wind_dir'].round(1)
     return df
 
-def calc_dist(df:pd.DataFrame) -> pd.DataFrame:
-    df.loc[0, 'dist'] = 0
-    for i in range(1, len(df)):
-        lat1 = df.loc[i-1, 'lat']
-        lon1 = df.loc[i-1, 'lon']
-        lat2 = df.loc[i, 'lat']
-        lon2 = df.loc[i, 'lon']
-        df.loc[i, 'dist'] = haversine(lat1, lon1, lat2, lon2)
-    df["dist"] = df["dist"].round(1)
+def calc_dist(df: pd.DataFrame) -> pd.DataFrame:
+    lat = np.radians(df['lat'].to_numpy())
+    lon = np.radians(df['lon'].to_numpy())
+
+    delta_lat = lat[1:] - lat[:-1]
+    delta_lon = lon[1:] - lon[:-1]
+
+    a = (np.sin(delta_lat/2)**2 +
+         np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(delta_lon/2)**2)
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    dist = np.concatenate(([0], 6371e3 * c))
+
+    df['dist'] = np.round(dist, 1)
     return df
 
 def calc_tas(df: pd.DataFrame) -> pd.DataFrame:
