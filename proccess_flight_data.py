@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import shutil
 import xarray as xr
+from tqdm import tqdm
 
 MET_DATA_DIR: str = "./met/wind_monthly_202411.nc4"
 MET_DATA = None
@@ -138,20 +139,20 @@ def create_save_dir():
         with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
             gitignore.write("*\n")
 
-def process_file(file_path: str) -> str:
-    print(f"Processing {flight_file}... ", end="")
+def process_file(flight_file_path: str):
     # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
-    df = pd.read_csv(os.path.join(RAW_DATA_DIR,flight_file))
+    df = pd.read_csv(os.path.join(RAW_DATA_DIR, flight_file_path))
     df.rename(columns={"lastposupdate": "time", "velocity": "gs"}, inplace=True)
     df.dropna(inplace=True)
     df.drop_duplicates(subset=["time"], keep="first", inplace=True)
     df.sort_values(by="time", inplace=True)
-    df.reset_index(drop=True,inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
-    # Remove files with large gaps in data
+    # Skip bad files
+    if len(df) < 100:
+        return flight_file_path
     if max(df["time"].diff()) >= 100:
-        print("skipping due to patchy data.")
-        return
+        return flight_file_path
 
     # Run more intensive cleaning and processing operations
     df = calc_dist(df)
@@ -162,15 +163,23 @@ def process_file(file_path: str) -> str:
     # Remove duplicates again after rounding
     df.drop_duplicates(subset=["time"], keep="first", inplace=True)
 
-    output_filepath = os.path.join(OUTPUT_DIR, flight_file)
+    output_filepath = os.path.join(OUTPUT_DIR, flight_file_path)
     df.to_csv(output_filepath, index=False)
-    print("done. Saved to: ", output_filepath)
+    return None
 
 
-create_save_dir()
-flight_files = find_flight_files(RAW_DATA_DIR)
-MET_DATA = load_met_data()
+if __name__ == "__main__":
+    create_save_dir()
+    flight_file_paths = find_flight_files(RAW_DATA_DIR)
+    MET_DATA = load_met_data()
 
-# Process each flight file
-for flight_file in flight_files:
-    process_file(flight_file)
+    skipped_files = []
+    for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
+        skipped_file = process_file(flight_file_path)
+        if skipped_file:
+            skipped_files.append(skipped_file)
+
+    if skipped_files:
+        print("\nSkipped files due to insufficient data points or patchy data:")
+        for skipped_file in skipped_files:
+            print(f"- {skipped_file}")
