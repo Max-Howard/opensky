@@ -39,7 +39,7 @@ def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
 
     indices_to_drop = altitude_change_rate[altitude_change_rate > 25].index
-    df.drop(indices_to_drop, inplace=True)
+    df.drop(indices_to_drop, inplace=True) # TODO should this be idx + 1?
 
     threshold = 50
     for col in ['geoaltitude', 'baroaltitude']:
