@@ -4,11 +4,14 @@ import numpy as np
 import shutil
 import xarray as xr
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
 
 MET_DATA_DIR: str = "./met/wind_monthly_202411.nc4"
 MET_DATA = None
 RAW_DATA_DIR = "RawFlightData"
 OUTPUT_DIR = "ProcessedFlightData"
+TIME_SLICE = slice(0, 16) # Data slicing needed to reduce memory usage when multiprocessing
+max_workers = 6
 
 def find_flight_files(directory: str):
     flight_files = []
@@ -163,18 +166,50 @@ def process_file(flight_file_path: str):
     return None
 
 
+# if __name__ == "__main__":
+#     create_save_dir()
+#     flight_file_paths = find_flight_files(RAW_DATA_DIR)
+#     MET_DATA = load_met_data(slice=TIME_SLICE)  # Load only two days of data
+
+#     skipped_files = []
+#     for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
+#         skipped_file = process_file(flight_file_path)
+#         if skipped_file:
+#             skipped_files.append(skipped_file)
+
+#     if skipped_files:
+#         print("\nSkipped files due to insufficient data points or patchy data:")
+#         for skipped_file in skipped_files:
+#             print(f"- {skipped_file}")
+
+
+def init_worker(time_slice=None):
+    """
+    Worker initializer: load MET data (optionally with a time slice) into memory once per process.
+    """
+    global MET_DATA
+    ds = xr.open_dataset(MET_DATA_DIR)
+    if time_slice is not None:
+        ds = ds.isel(time=time_slice)
+    MET_DATA = ds.load()
+
+
 if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()  # Only necessary if creating a standalone executable
+
     create_save_dir()
     flight_file_paths = find_flight_files(RAW_DATA_DIR)
-    MET_DATA = load_met_data(slice=slice(0, 16))  # Load only two days of data
+    MET_DATA = load_met_data(slice=TIME_SLICE)
 
     skipped_files = []
-    for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
-        skipped_file = process_file(flight_file_path)
-        if skipped_file:
-            skipped_files.append(skipped_file)
+    print("Setting up multiprocessing, progress bar may hang for a moment...")
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker, initargs=(TIME_SLICE,)) as executor:
+        for skipped in tqdm(executor.map(process_file, flight_file_paths), total=len(flight_file_paths), desc="Processing flights", unit="flight"):
+            if skipped:
+                skipped_files.append(skipped)
 
     if skipped_files:
-        print("\nSkipped files due to insufficient data points or patchy data:")
-        for skipped_file in skipped_files:
-            print(f"- {skipped_file}")
+        print("\nSkipped files due to missing or insufficient data:")
+        for s in skipped_files:
+            print(f"- {s}")
