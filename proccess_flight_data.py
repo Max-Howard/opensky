@@ -210,7 +210,7 @@ def simplify_trajectory(df: pd.DataFrame) -> pd.DataFrame:
             keep_mask[i-1] = True
             last_time = df['time'][i-1]
 
-    print(f"Kept {np.sum(keep_mask)}/{len(df)} points of due to RDP simplification.")
+    # print(f"Kept {np.sum(keep_mask)}/{len(df)} points of due to RDP simplification.")
 
     df = df.iloc[keep_mask].reset_index(drop=True)
     return df
