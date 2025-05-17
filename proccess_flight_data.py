@@ -71,6 +71,10 @@ def round_values(df: pd.DataFrame) -> pd.DataFrame:
         df['wind_speed'] = df['wind_speed'].round(1)
     if 'wind_dir' in df.columns:
         df['wind_dir'] = df['wind_dir'].round(1)
+
+    # Rounding can re-introduce duplicates - drop them
+    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
+
     return df
 
 
@@ -162,8 +166,6 @@ def process_file(flight_file_path: str):
     df = calc_tas(df)
     df = round_values(df)
 
-    # Remove duplicates again after rounding
-    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
     return {"file": flight_file_path, "status": "processed"}
 
