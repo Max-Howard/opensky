@@ -230,13 +230,14 @@ class FlightPath:
         """
         Calculate the path of the aircraft using BADA performance data.
         """
-        # alt_start = self.df["geoaltitude"].iloc[0]
-        # alt_stop = self.df["geoaltitude"].iloc[-1]
-        # alt_cruise = max(self.df["geoaltitude"])
 
         alt_start = self.origin_ap_data["alt"] * FT_TO_M
         alt_stop = self.destination_ap_data["alt"] * FT_TO_M
-        alt_cruise = AC_CRUISE_LEVELS.loc[self.typecode, "cr_fl"] * 100 * FT_TO_M
+        if self.typecode in AC_CRUISE_LEVELS.index:
+            alt_cruise = AC_CRUISE_LEVELS.loc[self.typecode, "cr_fl"] * 100 * FT_TO_M
+        else:
+            input(f"{self.typecode} not in cruise FL Database, falling back to max observed alt for BADA cruise alt. Press enter to acnolage:")
+            alt_cruise = self.df["baroaltitude"].max()
 
         lat_takeoff = self.origin_ap_data["lat"]
         lon_takeoff = self.origin_ap_data["lon"]
