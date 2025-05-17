@@ -151,8 +151,10 @@ def process_file(flight_file_path: str):
     df.sort_values(by="time", inplace=True)
     df.reset_index(drop=True, inplace=True)
 
-    if len(df) < 100 or max(df["time"].diff()) >= 100:
-        return flight_file_path
+    if len(df) < 100:
+        return {"file": flight_file_path, "status": "fail_insufficient_data"}
+    elif df["time"].diff().max() >= 100:
+        return {"file": flight_file_path, "status": "fail_patchy_data"}
 
     # Run more intensive cleaning and processing operations
     df = calc_dist(df)
@@ -163,24 +165,7 @@ def process_file(flight_file_path: str):
     # Remove duplicates again after rounding
     df.drop_duplicates(subset=["time"], keep="first", inplace=True)
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
-    return None
-
-
-# if __name__ == "__main__":
-#     create_save_dir()
-#     flight_file_paths = find_flight_files(RAW_DATA_DIR)
-#     MET_DATA = load_met_data(slice=TIME_SLICE)  # Load only two days of data
-
-#     skipped_files = []
-#     for flight_file_path in tqdm(flight_file_paths, desc="Processing flight files", unit="flights"):
-#         skipped_file = process_file(flight_file_path)
-#         if skipped_file:
-#             skipped_files.append(skipped_file)
-
-#     if skipped_files:
-#         print("\nSkipped files due to insufficient data points or patchy data:")
-#         for skipped_file in skipped_files:
-#             print(f"- {skipped_file}")
+    return {"file": flight_file_path, "status": "processed"}
 
 
 def init_worker(time_slice=None):
@@ -202,14 +187,16 @@ if __name__ == "__main__":
     flight_file_paths = find_flight_files(RAW_DATA_DIR)
     MET_DATA = load_met_data(slice=TIME_SLICE)
 
-    skipped_files = []
+    results = []
     print("Setting up multiprocessing, progress bar may hang for a moment...")
     with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker, initargs=(TIME_SLICE,)) as executor:
-        for skipped in tqdm(executor.map(process_file, flight_file_paths), total=len(flight_file_paths), desc="Processing flights", unit="flight"):
-            if skipped:
-                skipped_files.append(skipped)
+        for result in tqdm(executor.map(process_file, flight_file_paths), total=len(flight_file_paths), desc="Processing flights", unit="flight"):
+            results.append(result)
 
-    if skipped_files:
-        print("\nSkipped files due to missing or insufficient data:")
-        for s in skipped_files:
-            print(f"- {s}")
+    if results:
+        failed_patchy = [r for r in results if r["status"] == "fail_patchy_data"]
+        failed_length = [r for r in results if r["status"] == "fail_insufficient_data"]
+        successful = [r for r in results if r["status"] == "processed"]
+        print(f"Number of files that failed due to patchy data: {len(failed_patchy)}")
+        print(f"Number of files that failed due to insufficient data: {len(failed_length)}")
+        print(f"Number of files processed successfully: {len(successful)}")
