@@ -7,7 +7,7 @@ import time
 
 trino = Trino()
 
-scanning_stop = datetime(2024, 11, 30)
+scanning_stop = datetime(2024, 11, 2)
 scanning_start = datetime(2024, 11, 1)
 
 AIRCRAFT_DB = pd.read_csv("aircraft.csv")
@@ -180,7 +180,7 @@ def random_flights(limit=10, region=None):
     flight_durations = trino.flightlist(
         scanning_start,
         scanning_stop,
-        limit=limit)
+        ) #limit=limit
     flight_durations = flight_durations.dropna() # subset=['departure', 'arrival']
     num_found = len(flight_durations)
     flight_durations = flight_durations.merge(AIRCRAFT_DB[['icao24', 'typecode']], on='icao24', how='left')
@@ -193,6 +193,7 @@ def random_flights(limit=10, region=None):
     if region is not None:
         flight_durations = limit_to_region(flight_durations, region)
         print(f"Limited to region {region}, {len(flight_durations)} flights remain.")
+    flight_durations.to_csv(f"random_flights{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv", index=False)
     return flight_durations
 
 
