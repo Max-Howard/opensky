@@ -11,6 +11,8 @@ MET_DATA = None
 RAW_DATA_DIR = "RawFlightData"
 OUTPUT_DIR = "ProcessedFlightData"
 TIME_SLICE = slice(0, 16) # Data slicing needed to reduce memory usage when multiprocessing
+RDP_EPSILON = 10          # RDP tolerance in meters
+MAX_TIME_GAP = 30 # Maximum time gap in seconds between points to keep
 max_workers = 6
 
 def find_flight_files(directory: str):
@@ -145,6 +147,74 @@ def create_save_dir():
         with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
             gitignore.write("*\n")
 
+def rdp(points: np.ndarray, epsilon: float) -> list:
+    """
+    Ramer-Douglas-Peucker polyline simplification.
+    points: array of shape (N, 2 or 3)
+    epsilon: distance tolerance (same units as points)
+    returns: list of indices to keep
+    """
+    # Base case
+    if len(points) < 3:
+        return [0, len(points) - 1]
+
+    start, end = points[0], points[-1]
+    # Vectorized distance calculation
+    line_vec = end - start
+    line_len2 = np.dot(line_vec, line_vec)
+    # Project each point onto the line segment
+    rel = points - start
+    t = np.dot(rel, line_vec) / line_len2
+    t = np.clip(t, 0.0, 1.0)
+    proj = start + np.outer(t, line_vec)
+    dists = np.linalg.norm(points - proj, axis=1)
+
+    idx = np.argmax(dists)
+    max_dist = dists[idx]
+
+    if max_dist > epsilon:
+        left = rdp(points[:idx+1], epsilon)
+        right = rdp(points[idx:], epsilon)
+        # Combine, adjusting right indices
+        return left[:-1] + [i + idx for i in right]
+    else:
+        return [0, len(points) - 1]
+
+def simplify_trajectory(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Discared points that are within epsilon meters of the line segment between the first and last point.
+    Ensures a point is kept a point every MAX_TIME_GAP seconds, as long as large gap does not already exist.
+    """
+
+    # Simple method for converting to meters ok here as distances are small and not used in final simulaton
+    coords = np.vstack([
+        df['lat'].to_numpy() * 111000,
+        df['lon'].to_numpy() * 111000 * np.cos(np.radians(df['lat'].to_numpy())),
+        df['baroaltitude'].to_numpy()
+    ]).T
+
+    keep_idx = rdp(coords, RDP_EPSILON)
+    keep_mask = np.zeros(len(df), dtype=bool)
+    keep_mask[keep_idx] = True
+
+    # Ensure at least one point every 60 seconds is kept
+    # TODO Ideally this would be vectorised
+    last_time = None
+    for i, t in enumerate(df['time']):
+        if last_time is None:
+            last_time = t
+            keep_mask[i] = True
+        elif keep_mask[i]:
+            last_time = t
+        elif t - last_time >= MAX_TIME_GAP:
+            keep_mask[i-1] = True
+            last_time = df['time'][i-1]
+
+    print(f"Kept {np.sum(keep_mask)}/{len(df)} points of due to RDP simplification.")
+
+    df = df.iloc[keep_mask].reset_index(drop=True)
+    return df
+
 
 def process_file(flight_file_path: str):
     # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
@@ -155,6 +225,7 @@ def process_file(flight_file_path: str):
     df.sort_values(by="time", inplace=True)
     df.reset_index(drop=True, inplace=True)
 
+    # Discard flights with large gaps in data and flights with less than 100 points
     if len(df) < 100:
         return {"file": flight_file_path, "status": "fail_insufficient_data"}
     elif df["time"].diff().max() >= 100:
@@ -164,6 +235,7 @@ def process_file(flight_file_path: str):
     df = calc_dist(df)
     df = clean_alts(df)
     df = calc_tas(df)
+    df = simplify_trajectory(df)
     df = round_values(df)
 
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
