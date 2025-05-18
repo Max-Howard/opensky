@@ -232,10 +232,13 @@ def process_file(flight_file_path: str):
         return {"file": flight_file_path, "status": "fail_patchy_data"}
 
     # Run more intensive cleaning and processing operations
-    df = calc_dist(df)
     df = clean_alts(df)
     df = calc_tas(df)
+    # df = calc_dist(df)
+    # initial = sum(df['dist'])
     df = simplify_trajectory(df)
+    df = calc_dist(df)  # This must happen AFTER dropping points
+    # print(f"Dist lost to dropped points: {initial - sum(df['dist'])}")
     df = round_values(df)
 
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
