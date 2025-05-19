@@ -224,22 +224,24 @@ def process_file(flight_file_path: str):
     df.drop_duplicates(subset=["time"], keep="first", inplace=True)
     df.sort_values(by="time", inplace=True)
     df.reset_index(drop=True, inplace=True)
+    df = clean_alts(df) # This should be done before dropping points
 
     # Discard flights with large gaps in data and flights with less than 100 points
-    if len(df) < 100:
+    if len(df) < 1000:
         return {"file": flight_file_path, "status": "fail_insufficient_data"}
     elif df["time"].diff().max() >= 100:
         return {"file": flight_file_path, "status": "fail_patchy_data"}
+    elif df["baroaltitude"].max() < 2000:
+        return {"file": flight_file_path, "status": "fail_low_altitude"}
 
     # Run more intensive cleaning and processing operations
-    df = clean_alts(df)
-    df = calc_tas(df)
-    # df = calc_dist(df)
-    # initial = sum(df['dist'])
     df = simplify_trajectory(df)
+    df = calc_tas(df)
     df = calc_dist(df)  # This must happen AFTER dropping points
-    # print(f"Dist lost to dropped points: {initial - sum(df['dist'])}")
     df = round_values(df)
+
+    if df["dist"].sum() < 2500:
+        return {"file": flight_file_path, "status": "fail_low_distance"}
 
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
     return {"file": flight_file_path, "status": "processed"}
@@ -273,7 +275,11 @@ if __name__ == "__main__":
     if results:
         failed_patchy = [r for r in results if r["status"] == "fail_patchy_data"]
         failed_length = [r for r in results if r["status"] == "fail_insufficient_data"]
+        failed_low_altitude = [r for r in results if r["status"] == "fail_low_altitude"]
+        failed_low_distance = [r for r in results if r["status"] == "fail_low_distance"]
         successful = [r for r in results if r["status"] == "processed"]
         print(f"Number of files that failed due to patchy data: {len(failed_patchy)}")
         print(f"Number of files that failed due to insufficient data: {len(failed_length)}")
+        print(f"Number of files that failed due to low max altitude: {len(failed_low_altitude)}")
+        print(f"Number of files that failed due to low distance: {len(failed_low_distance)}")
         print(f"Number of files processed successfully: {len(successful)}")
