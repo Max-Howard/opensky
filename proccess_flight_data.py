@@ -12,7 +12,7 @@ RAW_DATA_DIR = "RawFlightData"
 OUTPUT_DIR = "ProcessedFlightData"
 TIME_SLICE = slice(0, 16) # Data slicing needed to reduce memory usage when multiprocessing
 RDP_EPSILON = 10          # RDP tolerance in meters
-MAX_TIME_GAP = 30 # Maximum time gap in seconds between points to keep
+MAX_TIME_GAP = 60 # Maximum time gap in seconds between points
 max_workers = 6
 
 def find_flight_files(directory: str):
@@ -228,23 +228,24 @@ def process_file(flight_file_path: str):
 
     # Discard flights with large gaps in data and flights with less than 100 points
     if len(df) < 1000:
-        return {"file": flight_file_path, "status": "fail_insufficient_data"}
-    elif df["time"].diff().max() >= 100:
-        return {"file": flight_file_path, "status": "fail_patchy_data"}
+        return {"file": flight_file_path, "status": "fail_insufficient_data", "len": len(df)}
+    elif df["time"].diff().max() >= MAX_TIME_GAP:
+        return {"file": flight_file_path, "status": "fail_patchy_data", "len": len(df)}
     elif df["baroaltitude"].max() < 2000:
-        return {"file": flight_file_path, "status": "fail_low_altitude"}
+        return {"file": flight_file_path, "status": "fail_low_altitude", "len": len(df)}
 
     # Run more intensive cleaning and processing operations
+    pre_rdp_len = len(df)
     df = simplify_trajectory(df)
     df = calc_tas(df)
     df = calc_dist(df)  # This must happen AFTER dropping points
     df = round_values(df)
 
-    if df["dist"].sum() < 2500:
+    if df["dist"].sum() < 10000:
         return {"file": flight_file_path, "status": "fail_low_distance"}
 
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
-    return {"file": flight_file_path, "status": "processed"}
+    return {"file": flight_file_path, "status": "processed", "len": len(df), "rdp_dropped": pre_rdp_len - len(df)}
 
 
 def init_worker(time_slice=None):
@@ -278,8 +279,12 @@ if __name__ == "__main__":
         failed_low_altitude = [r for r in results if r["status"] == "fail_low_altitude"]
         failed_low_distance = [r for r in results if r["status"] == "fail_low_distance"]
         successful = [r for r in results if r["status"] == "processed"]
+        num_points_successful = sum(r["len"] for r in successful)
+        num_points_rdp_dropped = sum(r["rdp_dropped"] for r in successful)
         print(f"Number of files that failed due to patchy data: {len(failed_patchy)}")
         print(f"Number of files that failed due to insufficient data: {len(failed_length)}")
         print(f"Number of files that failed due to low max altitude: {len(failed_low_altitude)}")
         print(f"Number of files that failed due to low distance: {len(failed_low_distance)}")
         print(f"Number of files processed successfully: {len(successful)}")
+        print(f"Number of points processed successfully: {num_points_successful}")
+        print(f"Number of points dropped due to RDP: {num_points_rdp_dropped}")
