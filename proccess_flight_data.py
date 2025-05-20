@@ -91,8 +91,8 @@ def calc_dist(df: pd.DataFrame) -> pd.DataFrame:
          np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(delta_lon/2)**2)
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     dist = np.concatenate(([0], 6371e3 * c))
-
-    df['dist'] = np.round(dist, 1)
+    cumulative_dist = np.cumsum(dist)
+    df['dist'] = np.round(cumulative_dist, 1)
     return df
 
 
