@@ -200,11 +200,10 @@ def merge_months(year='2019', file_out='./met/wind_yearly_2019.nc4'):
     return ds
 
 if __name__ == '__main__':
-    # basedir = r'../GEOS_0.5x0.625/MERRA-2/'
-    basedir = r'../GEOS_2x2.5/MERRA-2/'
-    year = '2019'
+    basedir = "RawWindData"
+    year = '2024'
     for month in [f'{m:02}' for m in range(1, 12 + 1)]:
-        output_fpath = r'./met/wind_monthly_' + year + month + '.nc4'
+        output_fpath = r'./met_openavem/wind_monthly_' + year + month + '.nc4'
         search = f'{basedir}{year}/{month}/' + r'*.A3dyn.*.nc4'
         fpaths = glob.glob(search)
         if len(fpaths) > 0:
