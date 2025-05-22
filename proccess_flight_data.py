@@ -6,14 +6,30 @@ import xarray as xr
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 
+# Non flight data
 MET_DATA_DIR: str = "./met/wind_monthly_202411.nc4"
 MET_DATA = None
+AIRPORT_DATA_DIR: str = "./met/airports.csv"
+AIRPORT_DATA = None
+
+# Flight data
 RAW_DATA_DIR = "RawFlightData"
 OUTPUT_DIR = "ProcessedFlightData"
+
+# Tolerances to determine considered anomalous points
+V_MAX = 1000         # Max velocity (m/s)
+ROCD_MAX = 25        # Max rate of climb/descent (m/s)
+
+# Tolerance for removing points
+RDP_EPSILON = 10          # RDP tolerance in (m)
+
+# Tolerance for dropping flights
+MAX_TIME_GAP = 60           # Maximum time gap in seconds between points (s)
+TOL_DIST_START_END = 10000  # Max distance flight can start/end from apt (m)
+TOL_ALT_START_END = 1000    # Max height above airport at start and end of data (m)
+
 TIME_SLICE = slice(0, 16) # Data slicing needed to reduce memory usage when multiprocessing
-RDP_EPSILON = 10          # RDP tolerance in meters
-MAX_TIME_GAP = 60 # Maximum time gap in seconds between points
-max_workers = 6
+MAX_WORKERS = 6
 
 def find_flight_files(directory: str):
     flight_files = []
@@ -269,7 +285,7 @@ if __name__ == "__main__":
 
     results = []
     print("Setting up multiprocessing, progress bar may hang for a moment...")
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker, initargs=(TIME_SLICE,)) as executor:
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=init_worker, initargs=(TIME_SLICE,)) as executor:
         for result in tqdm(executor.map(process_file, flight_file_paths), total=len(flight_file_paths), desc="Processing flights", unit="flight"):
             results.append(result)
 
