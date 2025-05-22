@@ -270,7 +270,6 @@ def simplify_trajectory(df: pd.DataFrame) -> pd.DataFrame:
     keep_mask = np.zeros(len(df), dtype=bool)
     keep_mask[keep_idx] = True
 
-    # Ensure at least one point every 60 seconds is kept
     # TODO Ideally this would be vectorised
     last_time = None
     for i, t in enumerate(df['time']):
@@ -302,7 +301,7 @@ def process_file(flight_file_path: str):
 
     pre_rdp_len = len(df)
     df = clean_alts(df) # This is done before RDP to avoid avoid creating large gaps later on (RDP does not account for GNSS altitude)
-    # df = simplify_trajectory(df)
+    df = simplify_trajectory(df)
     df = remove_anomalies(df)
 
     if df["time"].diff().max() > MAX_TIME_GAP:
