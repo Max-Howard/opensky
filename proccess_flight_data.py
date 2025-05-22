@@ -212,6 +212,14 @@ def create_save_dir():
         with open(os.path.join(OUTPUT_DIR, ".gitignore"), "w") as gitignore:
             gitignore.write("*\n")
 
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371000  # meters
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    d_phi = phi2 - phi1
+    d_lambda = np.radians(lon2 - lon1)
+    a = np.sin(d_phi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(d_lambda/2)**2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
 def rdp(points: np.ndarray, epsilon: float) -> list:
     """
     Ramer-Douglas-Peucker polyline simplification.
@@ -282,32 +290,47 @@ def simplify_trajectory(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def process_file(flight_file_path: str):
-    # Load the flight data, drop NaNs and duplicates, sort by time, and rename columns
-    df = pd.read_csv(os.path.join(RAW_DATA_DIR, flight_file_path))
-    df.rename(columns={"lastposupdate": "time", "velocity": "gs"}, inplace=True)
-    df.dropna(inplace=True)
-    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
-    df.sort_values(by="time", inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    df = clean_alts(df) # This should be done before dropping points
 
-    # Discard flights with large gaps in data and flights with less than 100 points
+    df = pd.read_csv(os.path.join(RAW_DATA_DIR, flight_file_path))
+    origin, destination, typecode, icao24, flight_number = flight_file_path.strip(".csv").split("_")
+
+    df.rename(columns={"lastposupdate": "time", "velocity": "gs"}, inplace=True)
+    df = clean_dataset(df)
+
     if len(df) < 1000:
         return {"file": flight_file_path, "status": "fail_insufficient_data", "len": len(df)}
-    elif df["time"].diff().max() >= MAX_TIME_GAP:
+
+    pre_rdp_len = len(df)
+    df = clean_alts(df) # This is done before RDP to avoid avoid creating large gaps later on (RDP does not account for GNSS altitude)
+    # df = simplify_trajectory(df)
+    df = remove_anomalies(df)
+
+    if df["time"].diff().max() > MAX_TIME_GAP:
         return {"file": flight_file_path, "status": "fail_patchy_data", "len": len(df)}
-    elif df["baroaltitude"].max() < 2000:
+
+    if df["baroaltitude"].max() < 2000:
         return {"file": flight_file_path, "status": "fail_low_altitude", "len": len(df)}
 
-    # Run more intensive cleaning and processing operations
-    pre_rdp_len = len(df)
-    df = simplify_trajectory(df)
-    df = calc_tas(df)
-    df = calc_dist(df)  # This must happen AFTER dropping points
-    df = round_values(df)
+    origin_airport_data = AIRPORT_DATA.loc[origin]
+    destination_airport_data = AIRPORT_DATA.loc[destination]
 
-    if df["dist"].sum() < 10000:
+    # Check if flight starts and ends near airport
+    start_dist = haversine(df.iloc[0]['lat'], df.iloc[0]['lon'],origin_airport_data['lat'], origin_airport_data['lon'])
+    end_dist = haversine(df.iloc[-1]['lat'], df.iloc[-1]['lon'],destination_airport_data['lat'], destination_airport_data['lon'])
+    if start_dist > TOL_DIST_START_END or end_dist > TOL_DIST_START_END:
+        return {"file": flight_file_path, "status": "fail_missing_start_end", "len": len(df)}
+    start_height_above_apt = df["baroaltitude"].iloc[0] - origin_airport_data["alt"]
+    end_height_above_apt = df["baroaltitude"].iloc[0] - destination_airport_data["alt"]
+    if max(start_height_above_apt, end_height_above_apt) > TOL_ALT_START_END:
+        return {"file": flight_file_path, "status": "fail_no_low_altitude_start_end", "len": len(df)}
+
+    df = calc_dist(df)
+
+    if df["dist"].iloc[-1] < 10000:
         return {"file": flight_file_path, "status": "fail_low_distance"}
+
+    df = calc_tas(df)
+    df = round_values(df)
 
     df.to_csv(os.path.join(OUTPUT_DIR, flight_file_path), index=False)
     return {"file": flight_file_path, "status": "processed", "len": len(df), "rdp_dropped": pre_rdp_len - len(df)}
@@ -318,6 +341,8 @@ def init_worker(time_slice=None):
     Worker initializer: load MET data (optionally with a time slice) into memory once per process.
     """
     global MET_DATA
+    global AIRPORT_DATA
+    AIRPORT_DATA = pd.read_csv("airports.csv").set_index("icao").copy()
     ds = xr.open_dataset(MET_DATA_DIR)
     if time_slice is not None:
         ds = ds.isel(time=time_slice)
@@ -343,6 +368,8 @@ if __name__ == "__main__":
         failed_length = [r for r in results if r["status"] == "fail_insufficient_data"]
         failed_low_altitude = [r for r in results if r["status"] == "fail_low_altitude"]
         failed_low_distance = [r for r in results if r["status"] == "fail_low_distance"]
+        failed_no_low_altitude_start_end = [r for r in results if r["status"] == "fail_no_low_altitude_start_end"]
+        failed_missing_start_end = [r for r in results if r["status"] == "fail_missing_start_end"]
         successful = [r for r in results if r["status"] == "processed"]
         num_points_successful = sum(r["len"] for r in successful)
         num_points_rdp_dropped = sum(r["rdp_dropped"] for r in successful)
@@ -350,6 +377,8 @@ if __name__ == "__main__":
         print(f"Number of files that failed due to insufficient data: {len(failed_length)}")
         print(f"Number of files that failed due to low max altitude: {len(failed_low_altitude)}")
         print(f"Number of files that failed due to low distance: {len(failed_low_distance)}")
+        print(f"Number of files that failed due to no low altitude at start/end: {len(failed_no_low_altitude_start_end)}")
+        print(f"Number of files that failed due to missing start/end: {len(failed_missing_start_end)}")
         print(f"Number of files processed successfully: {len(successful)}")
         print(f"Number of points processed successfully: {num_points_successful}")
         print(f"Number of points dropped due to RDP: {num_points_rdp_dropped}")
