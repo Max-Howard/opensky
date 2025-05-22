@@ -204,7 +204,7 @@ if __name__ == '__main__':
     year = '2024'
     for month in [f'{m:02}' for m in range(1, 12 + 1)]:
         output_fpath = r'./met_openavem/wind_monthly_' + year + month + '.nc4'
-        search = f'{basedir}{year}/{month}/' + r'*.A3dyn.*.nc4'
+        search = f'{basedir}/{year}/{month}/' + r'*.A3dyn.*.nc4'
         fpaths = glob.glob(search)
         if len(fpaths) > 0:
             ds = process_files(fpaths, output_fpath)
