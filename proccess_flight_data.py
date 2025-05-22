@@ -59,7 +59,7 @@ def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
     baro_altitude_rate = baro_altitude_diff / time_gap
     altitude_change_rate = np.maximum(geo_altitude_rate, baro_altitude_rate)
 
-    indices_to_drop = altitude_change_rate[altitude_change_rate > 25].index
+    indices_to_drop = altitude_change_rate[altitude_change_rate > ROCD_MAX].index
     df.drop(indices_to_drop, inplace=True) # TODO should this be idx + 1?
 
     threshold = 50
@@ -71,6 +71,55 @@ def clean_alts(df: pd.DataFrame) -> pd.DataFrame:
 
     df.reset_index(drop=True, inplace=True)
     return df
+
+def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    if "lastposupdate" in df.columns:
+        raise ValueError("DataFrame contains 'lastposupdate' column, this should be used as time.")
+    df.dropna(inplace=True)
+    df.drop_duplicates(subset=["time"], keep="first", inplace=True)
+    df.sort_values(by="time", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+def remove_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep only rows where each of lat, lon, baroaltitude, geoaltitude
+    don't cause velocity or rate of climb/descent to exceed the given tolerances.
+    """
+    if "lastposupdate" in df.columns:
+        raise ValueError("DataFrame contains 'lastposupdate' column, this should be used as time.")
+
+    kept_idx = []
+    last_vals = {}
+    # before = len(df)
+    for idx, row in df.iterrows():
+        lat, lon = row["lat"], row["lon"]
+        baro, geo = row["baroaltitude"], row["geoaltitude"]
+        time = row["time"]
+
+        if not last_vals: # Setup initial values
+            kept_idx.append(idx)
+            last_vals = dict(lat=lat, lon=lon, baro=baro, geo=geo, time=time)
+            continue
+
+        d_lat  = abs(lat  - last_vals["lat"])
+        d_lon  = abs(lon  - last_vals["lon"])
+        d_baro = abs(baro - last_vals["baro"])
+        d_geo  = abs(geo  - last_vals["geo"])
+        d_time = time - last_vals["time"]
+
+        tol_lat = V_MAX * d_time / 111000
+        tol_lon = V_MAX * d_time / (111000 * np.cos(np.radians(last_vals["lat"])))
+        tol_alt = ROCD_MAX * d_time
+
+        if (d_lat  <= tol_lat  and
+            d_lon  <= tol_lon and
+            d_baro <= tol_alt and
+            d_geo  <= tol_alt):
+            kept_idx.append(idx)
+            last_vals = dict(lat=lat, lon=lon, baro=baro, geo=geo, time=time)
+    # print(f"Removed {before - len(kept_idx)} points due to anomalies.")
+    return df.loc[kept_idx].reset_index(drop=True)
 
 
 def round_values(df: pd.DataFrame) -> pd.DataFrame:
