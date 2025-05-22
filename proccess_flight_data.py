@@ -279,7 +279,7 @@ def simplify_trajectory(df: pd.DataFrame) -> pd.DataFrame:
             keep_mask[i] = True
         elif keep_mask[i]:
             last_time = t
-        elif t - last_time >= MAX_TIME_GAP:
+        elif t - last_time >= MAX_TIME_GAP/2:
             keep_mask[i-1] = True
             last_time = df['time'][i-1]
 
