@@ -164,7 +164,6 @@ class FlightPath:
         self.time_gaps = self.df["time"].diff()
         if max(max(self.df["baroaltitude"]), max(self.df["geoaltitude"])) > self.ac_data["hMO"]:
             input(f"Warning: Flight {self.flight_num} exceeds maximum altitude of {self.ac_data['hMO']}, please acknowledge.")
-        self._find_distance_travelled()
         print(f"Flight imported from {filename}.")
 
     def __repr__(self):
@@ -190,15 +189,6 @@ class FlightPath:
             combined_df.sort_values(by="time", inplace=True)
             combined_df.reset_index(drop=True, inplace=True)
         return combined_df
-
-    def _find_distance_travelled(self):
-        distances = [0]
-        for i in range(1, len(self.df)):
-            prev_point = self.df.iloc[i - 1]
-            curr_point = self.df.iloc[i]
-            distance = geod.Inverse(prev_point["lat"], prev_point["lon"], curr_point["lat"], curr_point["lon"])["s12"]
-            distances.append(distances[-1] + distance)
-        self.df["distance"] = distances
 
     def find_ac_perf(self, altitude, interp=True) -> pd.Series:
         """
@@ -269,8 +259,8 @@ class FlightPath:
                         "lat": current_lat,
                         "lon": current_lon,
                         "vertrate": vertrate,
-                        "velocity": velocity,
-                        "distance": climb_distance_travelled,
+                        "tas": velocity,
+                        "dist": climb_distance_travelled,
                     }
                 )
                 current_alt += BADA_PLOT_TIME_STEP * vertrate
@@ -330,8 +320,8 @@ class FlightPath:
                     "lat": current_lat,
                     "lon": current_lon,
                     "vertrate": 0,
-                    "velocity": cr_vel,
-                    "distance": climb_distance_travelled + cruise_distance_travelled,
+                    "tas": cr_vel,
+                    "dist": climb_distance_travelled + cruise_distance_travelled,
                 }
             )
             cruise_distance_travelled += BADA_PLOT_TIME_STEP * cr_vel
@@ -539,16 +529,14 @@ class FlightPath:
             data_start = self.df["time"].iloc[0]
             plt.scatter((self.df["time"] - data_start) / 3600, self.df["geoaltitude"], s=5, alpha=0.5, color="red", label="GNSS Data")
             plt.scatter((self.df["time"] - data_start) / 3600, self.df["baroaltitude"], s=5, alpha=0.5, color="green", label="Barometric Data")
-            plt.plot((self.df["time"] - data_start) / 3600, self.df["vertrate"].cumsum(), color="black", label="Integrated Vertical Rate")
             if self.interp_df is not None:
                 plt.scatter((self.interp_df["time"] - data_start) / 3600, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
             plt.xlabel("Time (hours)")
         elif x_axis == "distance":
-            plt.scatter(self.df["distance"] / 1000, self.df["geoaltitude"], s=5, alpha=0.5, color="red", label="GNSS Data")
-            plt.scatter(self.df["distance"] / 1000, self.df["baroaltitude"], s=5, alpha=0.5, color="green", label="Barometric Data")
-            plt.plot(self.df["distance"] / 1000, self.df["vertrate"].cumsum() + self.origin_ap_data["alt"] * FT_TO_M, color="black", label="Integrated Vertical Rate")
+            plt.scatter(self.df["dist"] / 1000, self.df["geoaltitude"], s=5, alpha=0.5, color="red", label="GNSS Data")
+            plt.scatter(self.df["dist"] / 1000, self.df["baroaltitude"], s=5, alpha=0.5, color="green", label="Barometric Data")
             if self.interp_df is not None:
-                plt.scatter(self.interp_df["distance"] / 1000, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
+                plt.scatter(self.interp_df["dist"] / 1000, self.interp_df["alt"], s=5, alpha=0.5, color="blue", label="Interpolated")
             plt.xlabel("Distance (km)")
 
         if BADA:
@@ -558,8 +546,8 @@ class FlightPath:
                 plt.plot(self.bada_df["time"] / 3600, self.bada_df["alt"], label="BADA Path", linestyle="--")
                 plt.hlines(self.ac_data["hMO"]*FT_TO_M, 0, max(self.bada_df["time"] / 3600), linestyle="--", color="black", label="BADA Max Altitude")
             elif x_axis == "distance":
-                plt.plot(self.bada_df["distance"] / 1000, self.bada_df["alt"], label="BADA Path", linestyle="--")
-                plt.hlines(self.ac_data["hMO"]*FT_TO_M, 0, max(self.bada_df["distance"] / 1000), linestyle="--", color="black", label="BADA Max Altitude")
+                plt.plot(self.bada_df["dist"] / 1000, self.bada_df["alt"], label="BADA Path", linestyle="--")
+                plt.hlines(self.ac_data["hMO"]*FT_TO_M, 0, max(self.bada_df["dist"] / 1000), linestyle="--", color="black", label="BADA Max Altitude")
 
         takeoff_time = pd.to_datetime(self.df["time"].iloc[0], unit="s").round("s")
 
@@ -749,7 +737,7 @@ class FlightPath:
             xlabel:str = "Time (hours)"
 
         elif x_axis == "distance":
-            x: pd.Series = decent_df["distance"] / 1000
+            x: pd.Series = decent_df["dist"] / 1000
             xlabel:str = "Distance (km)"
 
 
