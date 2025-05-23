@@ -17,8 +17,8 @@ RAW_DATA_DIR = "RawFlightData"
 OUTPUT_DIR = "ProcessedFlightData"
 
 # Tolerances to determine considered anomalous points
-V_MAX = 1000         # Max velocity (m/s)
-ROCD_MAX = 25        # Max rate of climb/descent (m/s)
+V_MAX = 500         # Max velocity (m/s)
+ROCD_MAX = 50        # Max rate of climb/descent (m/s)
 
 # Tolerance for removing points
 RDP_EPSILON = 10          # RDP tolerance in (m)
