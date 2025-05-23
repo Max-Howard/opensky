@@ -607,6 +607,107 @@ def plot_vertical_rate_time_histogram(flight_paths, bins=100):
       plt.title("Time Spent at Each Vertical Rate")
       plt.show()
 
+def plt_lateral_inefficiency(flight_paths):
+      """
+      Calculate lateral inefficiency for each flight path and plot histogram weighted by total great circle distance.
+      """
+      # Calculate lateral inefficiency and collect flight distances
+      lateral_inefficiencies_adsb = []
+      lateral_inefficiencies_openavem = []
+      great_circle_distances = []
+      openavem_distances = []
+      adsb_distances = []
+      for flight_path_name, flight_path in flight_paths.items():
+            origin, destination, typecode, icao24, flight_number = flight_path_name.strip(".csv").split("_")
+
+            if origin == destination:
+                  continue
+
+            origin_lat = AIRPORT_NAMES.loc[origin, "lat"]
+            origin_lon = AIRPORT_NAMES.loc[origin, "lon"]
+
+            destination_lat = AIRPORT_NAMES.loc[destination, "lat"]
+            destination_lon = AIRPORT_NAMES.loc[destination, "lon"]
+
+            great_circle_distance = geodesic((origin_lat, origin_lon), (destination_lat, destination_lon)).meters
+            adsb_distance = flight_path['dist'].max()
+
+            # Calculate distance from origin airport to first datapoint
+            start_point = (flight_path['lat'].iloc[0], flight_path['lon'].iloc[0])
+            origin_point = (origin_lat, origin_lon)
+            start_gap = geodesic(origin_point, start_point).meters
+
+            # Calculate distance from last datapoint to destination airport
+            end_point = (flight_path['lat'].iloc[-1], flight_path['lon'].iloc[-1])
+            destination_point = (destination_lat, destination_lon)
+            end_gap = geodesic(end_point, destination_point).meters
+
+            adsb_distance += start_gap + end_gap
+            openavem_distance = great_circle_distance*1.0387 + 40.5 * 1.852 * 1000
+
+            inefficiency = (adsb_distance - great_circle_distance) / great_circle_distance
+            lateral_inefficiencies_adsb.append(inefficiency * 100)
+            lateral_inefficiencies_openavem.append((openavem_distance - great_circle_distance) / openavem_distance * 100)
+            great_circle_distances.append(great_circle_distance / 1000)  # Convert to kilometers
+            openavem_distances.append(openavem_distance/1000)
+            adsb_distances.append(adsb_distance / 1000)  # Convert to kilometers
+
+      print(sum(great_circle_distances))
+      print(sum(openavem_distances))
+      print(sum(adsb_distances))
+
+      # Convert to numpy arrays for easier masking
+      lateral_inefficiencies_adsb = np.array(lateral_inefficiencies_adsb)
+      lateral_inefficiencies_openavem = np.array(lateral_inefficiencies_openavem)
+      great_circle_distances = np.array(great_circle_distances)
+
+      # Mask out flights with less than 1000 km great circle distance
+      mask = great_circle_distances >= 1
+      ineff_adsb = lateral_inefficiencies_adsb[mask]
+      ineff_openavem = lateral_inefficiencies_openavem[mask]
+      distances = great_circle_distances[mask]
+
+      # Determine common x-axis range
+      min_x = min(ineff_adsb.min(), ineff_openavem.min())
+      max_x = max(ineff_adsb.max(), ineff_openavem.max())
+
+      # min_x = 0
+      max_x = 50
+
+      # Plot histograms of inefficiency, weighted by great circle distance, side by side
+      fig, axes = plt.subplots(1, 2, figsize=(14, 4), sharey=True)
+
+      axes[0].hist(
+            ineff_openavem,
+            bins=100,
+            weights=distances,
+            color='salmon',
+            edgecolor='black',
+            range=(min_x, max_x)
+      )
+      axes[0].set_xlabel("Lateral Inefficiency (%)")
+      axes[0].set_ylabel("Total Great Circle Distance (km)")
+      axes[0].set_yscale("log")
+      axes[0].set_title("Stock openAVEM Assumptions")
+      axes[0].set_xlim(min_x, max_x)
+
+      axes[1].hist(
+            ineff_adsb,
+            bins=100,
+            weights=distances,
+            color='skyblue',
+            edgecolor='black',
+            range=(min_x, max_x)
+      )
+      axes[1].set_xlabel("Lateral Inefficiency (%)")
+      axes[1].set_title("From ADS-B Tracks")
+      axes[1].set_xlim(min_x, max_x)
+
+      plt.tight_layout()
+      plt.show()
+
+
+            
 
 
 # flight_paths = load_flight_paths("ProcessedFlightData", include="A320", limit=1)
@@ -623,12 +724,12 @@ def plot_vertical_rate_time_histogram(flight_paths, bins=100):
 
 # plot_lto_cutoff(flight_paths)
 
-flight_paths = load_flight_paths("ProcessedFlightData", include="A320", limit=1000)
-# flight_paths = load_flight_paths("ProcessedNoRDP", include="A320", limit=1000)
+# flight_paths = load_flight_paths("ProcessedFlightData", include="A320", limit=1000)
+# # flight_paths = load_flight_paths("ProcessedNoRDP", include="A320", limit=1000)
 
-# plot_vertical_rate_time_histogram(flight_paths, bins=100)
+# # plot_vertical_rate_time_histogram(flight_paths, bins=100)
 
-vert_rate_vs_altitude(flight_paths)
+# vert_rate_vs_altitude(flight_paths)
 
 # flight_paths = interpolate_great_circle(flight_paths)
 # vel_mismatch_lat, vel_mismatch_lon = analyse_data(flight_paths)
@@ -640,3 +741,7 @@ vert_rate_vs_altitude(flight_paths)
 # altitude_plot(flight_paths)
 # vert_rate_plot(flight_paths)
 # vert_rate_vs_altitude(flight_paths)
+
+
+flight_paths = load_flight_paths("ProcessedFlightData", include="A320")
+plt_lateral_inefficiency(flight_paths)
