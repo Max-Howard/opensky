@@ -706,7 +706,76 @@ def plt_lateral_inefficiency(flight_paths):
       plt.tight_layout()
       plt.show()
 
+def plt_lateral_inefficiency_cmap(flight_paths, x_bins=25, y_bins=25):
+      # Calculate lateral inefficiency, great circle distance, and total flown distance for each flight
+      lateral_inefficiencies = []
+      great_circle_distances = []
+      adsb_distances = []
+      for flight_path_name, flight_path in flight_paths.items():
+            origin, destination, typecode, icao24, flight_number = flight_path_name.strip(".csv").split("_")
+            if origin == destination:
+                  continue
 
+            origin_lat = AIRPORT_NAMES.loc[origin, "lat"]
+            origin_lon = AIRPORT_NAMES.loc[origin, "lon"]
+            destination_lat = AIRPORT_NAMES.loc[destination, "lat"]
+            destination_lon = AIRPORT_NAMES.loc[destination, "lon"]
+
+            great_circle_distance = geodesic((origin_lat, origin_lon), (destination_lat, destination_lon)).meters
+            adsb_distance = flight_path['dist'].max()
+
+            # Distance from origin to first point
+            start_point = (flight_path['lat'].iloc[0], flight_path['lon'].iloc[0])
+            origin_point = (origin_lat, origin_lon)
+            start_gap = geodesic(origin_point, start_point).meters
+
+            # Distance from last point to destination
+            end_point = (flight_path['lat'].iloc[-1], flight_path['lon'].iloc[-1])
+            destination_point = (destination_lat, destination_lon)
+            end_gap = geodesic(end_point, destination_point).meters
+
+            adsb_distance += start_gap + end_gap
+
+            inefficiency = (adsb_distance - great_circle_distance) / great_circle_distance
+            lateral_inefficiencies.append(inefficiency * 100)
+            great_circle_distances.append(great_circle_distance / 1000)  # km
+            adsb_distances.append(adsb_distance / 1000)  # km
+
+      lateral_inefficiencies = np.array(lateral_inefficiencies)
+      great_circle_distances = np.array(great_circle_distances)
+      adsb_distances = np.array(adsb_distances)
+
+      # Mask out flights with less than 1 km great circle distance
+      mask = great_circle_distances >= 1
+      x = lateral_inefficiencies[mask]
+      y = great_circle_distances[mask]
+      c = adsb_distances[mask]
+
+      # Set x-axis (lateral inefficiency) to max 50
+      x_max = 50
+      x = np.clip(x, None, x_max)
+      x_edges = np.linspace(np.min(x), x_max, x_bins + 1)
+      y_edges = np.linspace(np.min(y), np.max(y), y_bins + 1)
+      hist, xedges, yedges = np.histogram2d(x, y, bins=[x_edges, y_edges], weights=c)
+
+      # Plot the 2D histogram as a colormesh with log colorbar
+      plt.figure(figsize=(10, 6))
+      X, Y = np.meshgrid(xedges, yedges)
+      pcm = plt.pcolormesh(X, Y, hist.T, cmap='viridis', norm='log')
+      plt.xlabel("Lateral Inefficiency (%)")
+      plt.ylabel("Flight Great Circle Distance (km)")
+      cbar = plt.colorbar(pcm, label="Distance Flown (km)")
+      plt.xlim(np.min(xedges), x_max)
+      plt.grid(True, linestyle='--', alpha=0.5)
+
+      # Add line for eqn x = 0.0387 + 40.5 * 1.852 / y
+      y_line = np.linspace(np.min(yedges[yedges > 0]), np.max(yedges), 300)
+      x_line = (0.0387 + 40.5 * 1.852 / y_line) * 100  # Convert to percent
+      plt.plot(x_line, y_line, color='red', linestyle='-', linewidth=1.5, label='openAVEM Assumption')
+
+      plt.legend()
+      plt.tight_layout()
+      plt.show()
             
 
 
@@ -743,5 +812,6 @@ def plt_lateral_inefficiency(flight_paths):
 # vert_rate_vs_altitude(flight_paths)
 
 
+
 flight_paths = load_flight_paths("ProcessedFlightData", include="A320")
-plt_lateral_inefficiency(flight_paths)
+plt_lateral_inefficiency_cmap(flight_paths)
